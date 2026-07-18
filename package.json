@@ -1,0 +1,20 @@
+{
+  "name": "xuexi-ziliao",
+  "version": "1.0.0",
+  "description": "学习资料 - Node.js 爬虫 + 本地视频库 web UI",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "crawl": "node crawler.js",
+    "build": "npm --prefix frontend run build",
+    "dev": "npm --prefix frontend run dev",
+    "postinstall": "npm --prefix frontend install --no-audit --no-fund"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "cheerio": "^1.0.0",
+    "crypto-js": "^4.2.0",
+    "express": "^4.21.0"
+  }
+}

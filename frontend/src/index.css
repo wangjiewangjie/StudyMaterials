@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== base (Tailwind preflight is disabled to avoid antd conflicts) ===== */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #1b1b1b;
+  color: #e6e6e6;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+#root { min-height: 100vh; }
+
+/* Thin dark scrollbars (PornHub-like) */
+* { scrollbar-width: thin; scrollbar-color: #2a2a2a #1b1b1b; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #1b1b1b; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 5px; border: 2px solid #1b1b1b; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+
+/* ===== player overlay fade-in (used by VideoPlayer.jsx) ===== */
+@keyframes vfade { from { opacity: 0; } to { opacity: 1; } }
+.v-overlay { animation: vfade .2s ease; }
+
+/* ===== antd Modal body padding reset (so video fills width) ===== */
+.player-modal .ant-modal-body { padding: 0; }
+
+/* ===== antd Collapse header padding reset (compact button in toolbar) ===== */
+.crawl-collapse .ant-collapse-header { padding: 0 !important; }
+.crawl-collapse .ant-collapse-content-box { padding: 0 !important; }
+
+/* ===== line-clamp helper for video titles ===== */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
