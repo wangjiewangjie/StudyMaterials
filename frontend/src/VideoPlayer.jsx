@@ -8,9 +8,10 @@ function proxyUrl(url) {
 }
 
 // Custom HLS.js loader: routes all cross-origin requests through the CORS proxy.
-function makeProxyLoader() {
+// Created once — recreating a class on every play is unnecessary.
+const ProxyLoader = (() => {
   const Base = Hls.DefaultConfig.loader;
-  return class ProxyLoader extends Base {
+  return class extends Base {
     load(context, config, callbacks) {
       const url = context.url;
       if (url && /^https?:\/\//i.test(url)) {
@@ -19,12 +20,13 @@ function makeProxyLoader() {
       super.load(context, config, callbacks);
     }
   };
-}
+})();
 
 export default function VideoPlayer({ item, onTags }) {
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const onTagsRef = useRef(onTags);
+  const loadGenRef = useRef(0);
 
   const [phase, setPhase] = useState('loading');
   const [errorMsg, setErrorMsg] = useState('');
@@ -35,6 +37,8 @@ export default function VideoPlayer({ item, onTags }) {
   const loadSource = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
+
+    const gen = ++loadGenRef.current;
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -53,7 +57,9 @@ export default function VideoPlayer({ item, onTags }) {
     // Refresh the m3u8 URL (auth keys expire) and pick up tags/date updates.
     try {
       const res = await fetch(`/api/refresh/${item.id}`);
+      if (gen !== loadGenRef.current) return; // stale — a newer load started
       const data = await res.json();
+      if (gen !== loadGenRef.current) return;
       if (data.ok) {
         const cb = onTagsRef.current;
         if (typeof cb === 'function' && (data.tags || data.category || data.datePublished)) {
@@ -63,18 +69,26 @@ export default function VideoPlayer({ item, onTags }) {
       }
     } catch (_) { /* fall through to stored URL */ }
 
+    if (gen !== loadGenRef.current) return;
+
     if (Hls.isSupported()) {
-      const hls = new Hls({ loader: makeProxyLoader() });
+      const hls = new Hls({ loader: ProxyLoader });
       hlsRef.current = hls;
       hls.loadSource(m3u8Url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (gen !== loadGenRef.current) return;
         setPhase('ready');
         video.play().catch(() => {});
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (gen !== loadGenRef.current) return;
         if (data.fatal) {
-          setErrorMsg(data.details || data.type || '播放错误');
+          setErrorMsg(
+            data.details === 'manifestLoadError' || data.details === 'manifestParsingError'
+              ? '视频地址已失效，可点下方重新加载'
+              : (data.details || data.type || '未知错误')
+          );
           setPhase('error');
         }
       });
@@ -83,20 +97,21 @@ export default function VideoPlayer({ item, onTags }) {
       setPhase('ready');
     } else {
       setPhase('error');
-      setErrorMsg('浏览器不支持 HLS 播放');
+      setErrorMsg('当前浏览器不支持此视频格式，请换用 Chrome / Edge');
     }
   }, [item.id, item.video]);
 
-  useEffect(() => { loadSource(); }, [loadSource]);
-
   useEffect(() => {
+    loadSource();
     return () => {
+      // Invalidate in-flight load when item changes or component unmounts.
+      loadGenRef.current++;
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
     };
-  }, []);
+  }, [loadSource]);
 
   const retry = useCallback(() => { loadSource(); }, [loadSource]);
 
@@ -113,21 +128,21 @@ export default function VideoPlayer({ item, onTags }) {
 
       {phase === 'loading' && (
         <div className="v-overlay absolute inset-0 z-[6] flex items-center justify-center bg-black/55">
-          <Spin size="large" tip="视频加载中..." />
+          <Spin size="large" tip="正在准备播放…" />
         </div>
       )}
       {phase === 'none' && (
         <div className="v-overlay absolute inset-0 z-[6] flex items-center justify-center bg-black/85">
-          <Result status="info" title="该文章没有视频" />
+          <Result status="info" title="暂无视频" subTitle="这条内容没有可播放地址" />
         </div>
       )}
       {phase === 'error' && (
         <div className="v-overlay absolute inset-0 z-[6] flex items-center justify-center bg-black/85">
           <Result
             status="error"
-            title="视频加载失败"
-            subTitle={errorMsg}
-            extra={<Button type="primary" icon={<ReloadOutlined />} onClick={retry}>重试</Button>}
+            title="播放失败"
+            subTitle={errorMsg || '请检查网络后重试'}
+            extra={<Button type="primary" icon={<ReloadOutlined />} onClick={retry}>重新加载</Button>}
           />
         </div>
       )}

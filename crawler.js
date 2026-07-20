@@ -90,6 +90,18 @@ function todayPageUrl(site, pageNum) {
   return site + p.replace(/\/$/, '') + `/page/${pageNum}/`;
 }
 
+// China (UTC+8) calendar date as YYYY-MM-DD.
+function chinaDateStr(offsetDays = 0) {
+  const t = Date.now() + 8 * 3600000 + offsetDays * 86400000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+function articleDateStr(iso) {
+  if (!iso) return null;
+  const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
 function searchUrl(site, keyword, pageNum) {
   const enc = encodeURIComponent(keyword);
   if (pageNum <= 1) return `${site}/search/${enc}/`;
@@ -296,6 +308,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
 // ---------- concurrency runner ----------
 
 async function mapWithConcurrency(items, limit, mapper) {
+  if (!items.length) return [];
   const results = new Array(items.length);
   let cursor = 0;
   let active = 0;
@@ -309,8 +322,8 @@ async function mapWithConcurrency(items, limit, mapper) {
           .then((r) => {
             results[idx] = r;
             active--;
-            launch();
             if (cursor >= items.length && active === 0) resolve(results);
+            else launch();
           })
           .catch(reject);
       }
@@ -332,6 +345,18 @@ function loadIndex(jsonPath) {
 function saveIndex(jsonPath, articles) {
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   fs.writeFileSync(jsonPath, JSON.stringify(articles, null, 2), 'utf8');
+}
+
+// Merge crawled articles into existing index: new/updated items are pushed
+// to the front; older entries without a match are kept. Dedupes by id.
+function mergeIntoIndex(existing, incoming) {
+  const incomingIds = new Set(incoming.map((a) => a.id));
+  const merged = [...incoming];
+  for (const a of existing) {
+    if (!incomingIds.has(a.id)) merged.push(a);
+  }
+  const added = incoming.filter((a) => !existing.some((e) => e.id === a.id)).length;
+  return { merged, added, updated: incoming.length - added };
 }
 
 // ---------- multi-site aggregated fetch ----------
@@ -368,41 +393,85 @@ async function fetchListPageFromAllSites(pageNum, log, mode) {
   return aggregated;
 }
 
-// Fetch the "今日" (today) category from every site that exposes one.
-// This is the priority source: today's freshest articles are collected before
-// the regular list pages. Most sites only have a single today page; page 2 is
-// attempted too and a 404 simply ends that site's contribution.
-async function fetchTodayFromAllSites(log) {
-  const aggregated = [];
-  const seenIds = new Set();
-  // Try up to 2 pages — breast supports pagination on /order/today/;
-  // others return a single page and 404 on page 2 (handled gracefully).
-  for (let pg = 1; pg <= 2; pg++) {
-    const results = await Promise.allSettled(
-      SITES.map(async (site) => {
-        const url = todayPageUrl(site, pg);
-        if (!url) return { site, articles: [] };
-        log(`[today] ${site} page ${pg}`);
-        const res = await getWithRetry(url, http, 2, headersFor(site));
-        return { site, articles: parseListPage(res.data, site) };
-      })
-    );
-    let gotAny = false;
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      if (r.status === 'fulfilled') {
-        gotAny = true;
-        if (r.value.articles.length) {
-          log(`  [today ${SITES[i]} p${pg}] -> ${r.value.articles.length} articles`);
-        }
-        for (const a of r.value.articles) {
-          if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
+// Fetch "今日" per site. Each site is handled independently: if its today
+// category returns zero articles, fall back to list page 1 (previous day).
+async function fetchTodayPerSiteWithFallback(log) {
+  const results = await Promise.allSettled(
+    SITES.map(async (site) => {
+      const articles = [];
+      const seen = new Set();
+      const add = (a) => {
+        if (!seen.has(a.id)) { seen.add(a.id); articles.push(a); }
+      };
+
+      let source = 'today';
+      const todayPath = SITE_TODAY_PATH[site];
+
+      if (todayPath) {
+        for (let pg = 1; pg <= 2; pg++) {
+          const url = todayPageUrl(site, pg);
+          if (!url) break;
+          try {
+            log(`[today] ${site} page ${pg}`);
+            const res = await getWithRetry(url, http, 2, headersFor(site));
+            parseListPage(res.data, site).forEach(add);
+          } catch (err) {
+            if (pg === 1) log(`  [today ${site}] FAILED: ${err.message}`);
+            break;
+          }
         }
       }
+
+      if (articles.length === 0) {
+        source = 'fallback';
+        log(`[today] ${site} -> 0 条，回退列表第 1 页（前一日）`);
+        try {
+          const res = await getWithRetry(listPageUrl(site, 1), http, 3, headersFor(site));
+          parseListPage(res.data, site).forEach(add);
+          log(`  [fallback ${site}] -> ${articles.length} articles`);
+        } catch (err) {
+          log(`  [fallback ${site}] FAILED: ${err.message}`);
+        }
+      } else {
+        log(`  [today ${site}] -> ${articles.length} articles`);
+      }
+
+      articles.forEach((a) => { a._listSource = source; });
+      return articles;
+    })
+  );
+
+  const aggregated = [];
+  const seenIds = new Set();
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === 'fulfilled') {
+      for (const a of r.value) {
+        if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
+      }
+    } else {
+      log(`  [today ${SITES[i]}] FAILED: ${r.reason.message}`);
     }
-    if (!gotAny) break; // no site returned a today page at this depth; stop
   }
   return aggregated;
+}
+
+// Keep articles whose dateModified matches the list source (today vs fallback).
+function filterArticlesByModifiedDate(articles, log) {
+  const today = chinaDateStr(0);
+  const yesterday = chinaDateStr(-1);
+  const before = articles.length;
+  for (let i = articles.length - 1; i >= 0; i--) {
+    const a = articles[i];
+    const d = articleDateStr(a.dateModified);
+    if (!d) continue; // keep when dateModified unknown
+    if (a._listSource === 'today' && d !== today) articles.splice(i, 1);
+    else if (a._listSource === 'fallback' && d !== yesterday) articles.splice(i, 1);
+  }
+  if (before - articles.length > 0) {
+    log(`dateModified filter (today=${today}, yesterday=${yesterday}): removed ${before - articles.length}`);
+  }
+  articles.forEach((a) => { delete a._listSource; });
 }
 
 // ---------- core crawl (module API) ----------
@@ -411,6 +480,8 @@ async function fetchTodayFromAllSites(log) {
 //   pageStart, pageEnd   list page range (default 1..1)
 //   search               search keyword (overrides pages)
 //   searchPages          how many search result pages (default 1)
+//   todayOnly            startup mode: only 今日 per site (+ per-site fallback), no list pages
+//   replace              replace index.json entirely (default: true only when todayOnly)
 //   limit                max articles (default 0 = all)
 //   outDir               output directory
 //   concurrency         detail workers (default 3)
@@ -421,6 +492,9 @@ async function crawl(opts = {}) {
   const pageEnd = opts.pageEnd || opts.pageStart || 1;
   const searchKeyword = opts.search || null;
   const searchPages = opts.searchPages || 1;
+  const todayOnly = !!opts.todayOnly;
+  // Startup (todayOnly) replaces; UI sync merges/pushes unless replace:true.
+  const replace = opts.replace != null ? !!opts.replace : todayOnly;
   const limit = opts.limit || 0;
   const outDir = path.resolve(opts.outDir || './output');
   const concurrency = opts.concurrency || 3;
@@ -431,13 +505,11 @@ async function crawl(opts = {}) {
 
   const mode = searchKeyword
     ? { type: 'search', keyword: searchKeyword, label: `search "${searchKeyword}" pages 1..${searchPages}` }
-    : { type: 'list', label: `pages ${pageStart}..${pageEnd}` };
+    : todayOnly
+      ? { type: 'list', label: 'today only (per-site fallback)' }
+      : { type: 'list', label: `pages ${pageStart}..${pageEnd}` };
   log(`=== crawler start | ${mode.label} | ${SITES.length} sites ===`);
 
-  // 1. Collect articles from all sites.
-  //    In list mode, the "今日" (today) category is fetched FIRST so the day's
-  //    freshest content is prioritized, then the regular list pages fill in the
-  //    rest (overlapping IDs are deduplicated).
   const newArticles = [];
   const collectedIds = new Set();
   const addUnique = (a) => {
@@ -445,18 +517,20 @@ async function crawl(opts = {}) {
   };
 
   if (mode.type === 'list') {
-    log('--- Fetching 今日 (priority) ---');
-    const todayArts = await fetchTodayFromAllSites(log);
+    log('--- Fetching 今日 (per-site, fallback if empty) ---');
+    const todayArts = await fetchTodayPerSiteWithFallback(log);
     for (const a of todayArts) addUnique(a);
-    log(`Today: ${todayArts.length} articles (priority)`);
+    log(`Today+fallback: ${todayArts.length} articles`);
   }
 
-  const totalPages = searchKeyword ? searchPages : (pageEnd - pageStart + 1);
-  for (let i = 0; i < totalPages; i++) {
-    const pageNum = searchKeyword ? (i + 1) : (pageStart + i);
-    const arts = await fetchListPageFromAllSites(pageNum, log, mode);
-    for (const a of arts) addUnique(a);
-    if (i < totalPages - 1) await sleep(300);
+  if (!todayOnly) {
+    const totalPages = searchKeyword ? searchPages : (pageEnd - pageStart + 1);
+    for (let i = 0; i < totalPages; i++) {
+      const pageNum = searchKeyword ? (i + 1) : (pageStart + i);
+      const arts = await fetchListPageFromAllSites(pageNum, log, mode);
+      for (const a of arts) addUnique(a);
+      if (i < totalPages - 1) await sleep(300);
+    }
   }
 
   log(`Collected ${newArticles.length} unique articles from ${SITES.length} sites`);
@@ -475,9 +549,11 @@ async function crawl(opts = {}) {
   }
 
   if (newArticles.length === 0) {
+    // Keep the existing index — do not wipe it when a crawl finds nothing
+    // (e.g. all sites temporarily unreachable or all titles excluded).
+    const existing = loadIndex(jsonPath);
     log('No articles found, nothing to do.');
-    saveIndex(jsonPath, []);
-    return { added: 0, total: 0 };
+    return { added: 0, total: existing.length };
   }
 
   // 2. Fetch detail pages -> extract video URLs + tags + category + real cover
@@ -521,14 +597,31 @@ async function crawl(opts = {}) {
     log(`Excluded ${beforeTagFilter - newArticles.length} articles by tag (重口味/ai)`);
   }
 
-  // 3. Replace the old index with the freshly crawled articles.
-  //    Each crawl discards the previous list so the index always reflects the
-  //    most recent crawl (no stale accumulation).
-  saveIndex(jsonPath, newArticles);
+  if (todayOnly) {
+    filterArticlesByModifiedDate(newArticles, log);
+  } else {
+    newArticles.forEach((a) => { delete a._listSource; });
+  }
 
-  const withVideo = newArticles.filter((a) => a.video && a.video.url).length;
-  log(`Done. Total ${newArticles.length} articles in index | ${withVideo} with video URL`);
-  return { added: newArticles.length, total: newArticles.length };
+  if (newArticles.length === 0) {
+    const existing = loadIndex(jsonPath);
+    log('No articles left after filters, keeping existing index.');
+    return { added: 0, total: existing.length, updated: 0 };
+  }
+
+  if (replace) {
+    saveIndex(jsonPath, newArticles);
+    const withVideo = newArticles.filter((a) => a.video && a.video.url).length;
+    log(`Done (replace). Total ${newArticles.length} articles | ${withVideo} with video URL`);
+    return { added: newArticles.length, total: newArticles.length, updated: 0 };
+  }
+
+  const existing = loadIndex(jsonPath);
+  const { merged, added, updated } = mergeIntoIndex(existing, newArticles);
+  saveIndex(jsonPath, merged);
+  const withVideo = merged.filter((a) => a.video && a.video.url).length;
+  log(`Done (merge). +${added} new, ~${updated} updated | total ${merged.length} | ${withVideo} with video URL`);
+  return { added, total: merged.length, updated };
 }
 
 // ---------- CLI ----------
@@ -560,6 +653,8 @@ async function main() {
     pageEnd,
     search: args.search || null,
     searchPages,
+    todayOnly: !!args['today-only'],
+    replace: !!args.replace || !!args['today-only'],
     limit: parseInt(args.limit, 10) || 0,
     outDir: args.out || './output',
     concurrency: parseInt(args.concurrency, 10) || 3,

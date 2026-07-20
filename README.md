@@ -1,17 +1,18 @@
 # 学习资料
 
-Node.js 爬虫 + 本地视频库 Web UI —— 爬取 4 个站点的文章元数据与 m3u8 视频地址，提供本地搜索、在线搜索（触发爬取）与 HLS 在线播放。
+Node.js 爬虫 + 本地视频库 Web UI —— 爬取 4 个站点的文章元数据与 m3u8 视频地址，提供本地搜索、统一「同步资料」（关键词搜索 / 列表抓取）与 HLS 在线播放。
 
 ## 功能特性
 
 - **多站点爬取**：同时爬取 4 个源站（91吃瓜 / 91视频 / 51fans / 51爆料），自动按站点去重
-- **今日优先**：每次列表爬取先抓取各站点「今日」标签的最新内容，再补充常规列表页
+- **今日优先**：列表爬取先抓各站点「今日」；**按站点独立**判断，某站今日为空则回退该站列表第 1 页（前一日）；启动爬取按 `dateModified` 过滤当日/前一日
 - **视频地址解析**：从详情页 `.dplayer` 的 `data-config` 中提取真实 m3u8 URL（自动过滤 pre_ads / post_ads）
 - **日期抓取**：从详情页 `<meta itemprop="datePublished">` 或 JSON-LD 中解析发布日期
 - **内容过滤**：标题或标签含「重口味」「ai」的文章自动筛除
-- **索引替换**：每次爬取用新数据替换旧 `index.json`，不累积过期内容
+- **索引写入**：服务启动爬取会**整库替换** `index.json`；界面「同步资料」则 **push 合并**（新条目置顶、同 ID 更新、旧条目保留）
 - **本地搜索**：按标题或 ID 过滤已爬取的记录
-- **线上搜索**：输入关键词 → 爬取网站搜索结果 → 入库 → 展示
+- **同步资料**：同一入口——有关键词则全网搜索同步，无关键词则按页码抓取「今日」+ 列表
+- **收藏**：独立 `output/favorites.json`，同步/爬取不会清空；支持下载 JSON 或地址列表
 - **HLS 在线播放**：基于 hls.js + 自定义 ProxyLoader，通过 CORS 代理播放带 AES-128 加密、带时效 auth_key 的 m3u8
 - **URL 刷新**：播放前自动调用 `/api/refresh/:id` 重新抓取详情页，获取未过期的 m3u8 地址
 - **封面按需解密**：封面不落盘，通过 `/api/cover/:id` 实时抓取并内存解密后返回
@@ -53,7 +54,7 @@ npm install      # 安装后端依赖；postinstall 会自动装好前端依赖
 npm start        # 启动服务器，打开 http://localhost:3000
 ```
 
-> `npm install` 触发的 `postinstall` 会自动执行 `npm --prefix frontend install`，因此无需手动进入 `frontend/` 目录安装。
+> `npm install` 触发的 `postinstall` 会在 `frontend/` 下自动执行一次依赖安装，因此无需手动进入该目录。若前端安装失败，可单独执行：`cd frontend && npm install`。
 
 启动成功会看到：
 
@@ -62,7 +63,7 @@ npm start        # 启动服务器，打开 http://localhost:3000
 已加载 N 条记录
 ```
 
-服务器启动时会自动后台爬取一次今日最新内容。
+服务器启动时会自动后台爬取各站点「今日」内容；若某站今日为空，则单独回退抓取该站列表第 1 页（前一日）。
 
 ### 修改端口
 
@@ -161,6 +162,10 @@ npm run crawl -- --pages 1 --out ./output --concurrency 5
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/videos` | 获取全部视频列表（可选 `?q=关键词` 本地搜索） |
+| GET | `/api/favorites` | 收藏列表（独立 `favorites.json`，不受爬取清空影响） |
+| POST | `/api/favorites` | 加入收藏（body 含条目快照） |
+| DELETE | `/api/favorites/:id` | 取消收藏 |
+| GET | `/api/favorites/download` | 下载收藏（`?format=json` 或 `txt`） |
 | GET | `/api/refresh/:id` | 刷新某文章的 m3u8 URL（重新抓取详情页获取未过期地址） |
 | GET | `/api/cover/:id` | 实时抓取并解密封面图，内存返回（不落盘） |
 | POST | `/api/search-online` | 在线搜索并爬取，body：`{ keyword, pages }` |

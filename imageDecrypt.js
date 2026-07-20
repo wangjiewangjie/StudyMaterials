@@ -4,7 +4,6 @@
 // via the decryptImage() function in zzz.js. This module loads that
 // function in a VM sandbox and exposes a simple decryptBuffer() API.
 
-const fs = require('fs');
 const vm = require('vm');
 const axios = require('axios');
 const CryptoJS = require('crypto-js');

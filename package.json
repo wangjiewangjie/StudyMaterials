@@ -1,5 +1,5 @@
 {
-  "name": "xuexi-ziliao",
+  "name": "StudyMaterials",
   "version": "1.0.0",
   "description": "学习资料 - Node.js 爬虫 + 本地视频库 web UI",
   "main": "server.js",
@@ -9,7 +9,7 @@
     "crawl": "node crawler.js",
     "build": "npm --prefix frontend run build",
     "dev": "npm --prefix frontend run dev",
-    "postinstall": "npm --prefix frontend install --no-audit --no-fund"
+    "postinstall": "node scripts/install-frontend.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
