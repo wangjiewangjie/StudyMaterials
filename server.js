@@ -10,6 +10,7 @@ const fs = require('fs');
 const axios = require('axios');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, BASE_URL } = require('./crawler');
 const { decryptBuffer } = require('./imageDecrypt');
+const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hlsUrl');
 
 const PORT = process.env.PORT || 3000;
 const OUT_DIR = path.resolve(__dirname, 'output');
@@ -17,6 +18,24 @@ const JSON_PATH = path.join(OUT_DIR, 'index.json');
 const FAV_PATH = path.join(OUT_DIR, 'favorites.json');
 const BUILD_DIR = path.join(__dirname, 'public', 'build');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS, 10) || 90000;
+const REFRESH_TIMEOUT_MS = parseInt(process.env.REFRESH_TIMEOUT_MS, 10) || 60000;
+
+function shortUrl(url, max = 120) {
+  if (!url) return '';
+  return url.length > max ? `${url.slice(0, max)}…` : url;
+}
+
+function requestErrorInfo(err, url) {
+  const timedOut = err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''));
+  return {
+    timedOut,
+    code: err.code || null,
+    message: err.message,
+    status: err.response && err.response.status,
+    url: shortUrl(url),
+  };
+}
 
 const app = express();
 app.use(express.json());
@@ -117,15 +136,63 @@ function patchFavoriteById(id, patch) {
 // ---------- CORS proxy for HLS (m3u8 / TS / AES key) ----------
 // Browsers block cross-origin HLS requests, so we proxy through localhost.
 // CDNs require a Referer matching the target origin, otherwise 403.
-app.get('/proxy/*', async (req, res) => {
-  let targetUrl;
+//
+// Do NOT decodeURIComponent(req.params[0]) again — Express already decodes the
+// path once. A second decode corrupts auth_key values that contain %XX sequences
+// (e.g. %3D / %2F), which yields 403 or wrong bytes and looks like "cannot decode".
+
+function proxyPathFor(absUrl) {
+  return '/proxy/' + encodeURIComponent(normalizeUpstreamUrl(absUrl));
+}
+
+function resolvePlaylistUri(uri, playlistUrl) {
+  if (!uri || /^\/proxy\//i.test(uri) || /^data:/i.test(uri)) return null;
   try {
-    targetUrl = decodeURIComponent(req.params[0]);
+    return new URL(uri, playlistUrl).href;
   } catch (_) {
-    return res.status(400).send('bad url');
+    return null;
+  }
+}
+
+// Rewrite m3u8 so relative segment / AES-key / child-playlist URIs become
+// same-origin /proxy/... paths. Needed for Safari native HLS (no custom loader)
+// and as a safety net when response.url restoration is missed.
+function rewriteM3u8(text, playlistUrl) {
+  if (!text.includes('#EXTM3U')) return text;
+  return text.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    if (trimmed.startsWith('#')) {
+      return line.replace(/URI="([^"]+)"/gi, (m, uri) => {
+        const abs = resolvePlaylistUri(uri, playlistUrl);
+        return abs ? `URI="${proxyPathFor(abs)}"` : m;
+      });
+    }
+    const abs = resolvePlaylistUri(trimmed, playlistUrl);
+    return abs ? proxyPathFor(abs) : line;
+  }).join('\n');
+}
+
+app.get('/proxy/*', async (req, res) => {
+  // Express has already decoded the splat once — use as-is.
+  let targetUrl = req.params[0];
+  if (!targetUrl) return res.status(400).send('bad url');
+  // Only decode if the value still looks percent-encoded (non-Express clients).
+  if (!/^https?:\/\//i.test(targetUrl) && /%[0-9a-f]{2}/i.test(targetUrl)) {
+    try {
+      targetUrl = decodeURIComponent(targetUrl);
+    } catch (_) {
+      return res.status(400).send('bad url');
+    }
   }
   if (!/^https?:\/\//i.test(targetUrl)) {
     return res.status(400).send('invalid url');
+  }
+
+  const rawTarget = targetUrl;
+  targetUrl = normalizeUpstreamUrl(targetUrl);
+  if (targetUrl !== rawTarget) {
+    console.log('[proxy] unwrapped nested CDN proxy', shortUrl(rawTarget), '->', shortUrl(targetUrl));
   }
 
   let referer;
@@ -136,10 +203,14 @@ app.get('/proxy/*', async (req, res) => {
   }
 
   try {
+    const isSegment = /\.(ts|m4s|mp4|aac)(\?|$)/i.test(targetUrl);
+    const timeout = isSegment ? PROXY_TIMEOUT_MS : Math.min(PROXY_TIMEOUT_MS, 60000);
+    const t0 = Date.now();
     const upstream = await axios.get(targetUrl, {
       responseType: 'arraybuffer',
-      timeout: 30000,
+      timeout,
       maxRedirects: 5,
+      maxContentLength: 80 * 1024 * 1024,
       headers: {
         'User-Agent': UA,
         Referer: referer,
@@ -148,15 +219,35 @@ app.get('/proxy/*', async (req, res) => {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       },
     });
+    const elapsed = Date.now() - t0;
+    if (elapsed > 8000) {
+      console.warn('[proxy] slow upstream', { ms: elapsed, url: shortUrl(targetUrl), bytes: upstream.data && upstream.data.byteLength });
+    }
     let ct = upstream.headers['content-type'] || 'application/octet-stream';
     if (/\.key(\?|$)/i.test(targetUrl)) ct = 'application/octet-stream';
+
+    let body = Buffer.from(upstream.data);
+    const looksM3u8 = /\.m3u8(\?|$)/i.test(targetUrl) || /mpegurl|m3u8/i.test(ct);
+    if (looksM3u8) {
+      const text = body.toString('utf8');
+      if (text.includes('#EXTM3U')) {
+        body = Buffer.from(rewriteM3u8(text, targetUrl), 'utf8');
+        ct = 'application/vnd.apple.mpegurl';
+      }
+    }
+
     res.set('Content-Type', ct);
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Cache-Control', 'no-cache');
-    res.send(upstream.data);
+    res.send(body);
   } catch (err) {
-    const code = err.response && err.response.status ? err.response.status : 502;
-    res.status(code).send('proxy error: ' + err.message);
+    const info = requestErrorInfo(err, targetUrl);
+    console.error('[proxy] failed', info);
+    const code = info.status || (info.timedOut ? 504 : 502);
+    res.status(code).json({
+      error: `proxy error: ${err.message}`,
+      ...info,
+    });
   }
 });
 
@@ -227,7 +318,7 @@ app.get('/api/refresh/:id', async (req, res) => {
   try {
     const refererSite = target.siteUrl || (target.url ? new URL(target.url).origin : BASE_URL);
     const r = await axios.get(target.url, {
-      timeout: 30000,
+      timeout: REFRESH_TIMEOUT_MS,
       maxRedirects: 5,
       headers: { 'User-Agent': UA, Referer: refererSite + '/' },
     });
@@ -280,7 +371,9 @@ app.get('/api/refresh/:id', async (req, res) => {
     }
     res.json({ ok: true, video: target.video, tags: target.tags || [], category: target.category || null, datePublished: target.datePublished || null });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    const info = requestErrorInfo(err, target.url);
+    console.error('[refresh]', req.params.id, info);
+    res.status(502).json({ error: err.message, ...info });
   }
 });
 

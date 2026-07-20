@@ -7,7 +7,8 @@ import {
   SearchOutlined, SyncOutlined, LinkOutlined,
   VideoCameraOutlined, InboxOutlined, GlobalOutlined,
   CalendarOutlined, ClearOutlined, ReloadOutlined,
-  StarOutlined, StarFilled, DownloadOutlined,
+  StarOutlined, StarFilled, DownloadOutlined, PlayCircleFilled,
+  CopyOutlined, VerticalAlignTopOutlined, CloseOutlined,
 } from '@ant-design/icons';
 import VideoPlayer from './VideoPlayer.jsx';
 
@@ -20,6 +21,8 @@ const SITE_NAMES = {
   'breast.eiejvjgex.cc': '51fans',
   'assert.pbtiodqn.cc': '51爆料',
 };
+
+const PAGE_SIZE = 60;
 
 function siteLabel(siteUrl) {
   if (!siteUrl) return '未知来源';
@@ -37,63 +40,105 @@ function formatDate(iso) {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 }
 
-const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFavorite }) {
+function SkeletonGrid({ count = 12 }) {
+  return (
+    <div className="grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="overflow-hidden rounded-md border border-ph-border bg-ph-card rise-in" style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}>
+          <div className="skel w-full" style={{ aspectRatio: '16/9' }} />
+          <div className="p-2.5 space-y-2">
+            <div className="skel h-3.5 w-[92%] rounded-sm" />
+            <div className="skel h-3.5 w-[64%] rounded-sm" />
+            <div className="skel h-2.5 w-[40%] rounded-sm mt-1" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFavorite, index = 0 }) {
   const thumb = item.coverUrl ? `/api/cover/${item.id}` : '';
   const hasVideo = !!(item.video && item.video.url);
+  const [imgOk, setImgOk] = useState(!!thumb);
+
   const handleClick = useCallback(() => onClick(item), [item, onClick]);
   const handleFav = useCallback((e) => {
     e.stopPropagation();
     onToggleFavorite && onToggleFavorite(item);
   }, [item, onToggleFavorite]);
+  const handleKey = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClick(item);
+    }
+  }, [item, onClick]);
+
   return (
     <Card
       hoverable
       size="small"
-      className="group overflow-hidden !bg-ph-card !border-ph-border transition-transform duration-150 hover:-translate-y-[3px] hover:!border-ph-orange"
+      role="button"
+      tabIndex={0}
+      aria-label={(item.title || `条目 ${item.id}`) + (hasVideo ? '，可播放' : '，无法播放')}
+      className="group overflow-hidden !bg-ph-card !border-ph-border transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-[3px] hover:!border-ph-orange hover:shadow-[0_8px_24px_rgba(0,0,0,.35)] focus-visible:!border-ph-orange focus-visible:outline-none rise-in"
+      style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
       styles={{ body: { padding: 0 } }}
       onClick={handleClick}
+      onKeyDown={handleKey}
     >
       <div className="relative w-full overflow-hidden bg-black" style={{ aspectRatio: '16/9' }}>
-        {thumb && (
+        {thumb && imgOk ? (
           <img
             src={thumb}
             alt=""
             loading="lazy"
             className="w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105"
-            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            onError={() => setImgOk(false)}
           />
-        )}
-        {!thumb && (
-          <div className="absolute inset-0 flex items-center justify-center text-ph-text-tertiary">
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-ph-text-tertiary bg-gradient-to-br from-[#1a1a1a] to-[#2a2a2a]">
             <VideoCameraOutlined style={{ fontSize: 32 }} />
           </div>
         )}
-        <span className="absolute top-1.5 left-1.5 bg-ph-orange/95 text-black text-[11px] font-bold px-1.5 py-0.5 rounded-sm flex items-center gap-1">
+
+        <span className="absolute top-1.5 left-1.5 bg-ph-orange/95 text-black text-[11px] font-bold px-1.5 py-0.5 rounded-sm flex items-center gap-1 shadow-sm">
           <GlobalOutlined />
           {siteLabel(item.siteUrl)}
         </span>
+
         <button
           type="button"
           title={favorited ? '取消收藏' : '加入收藏'}
+          aria-label={favorited ? '取消收藏' : '加入收藏'}
           onClick={handleFav}
-          className="absolute top-1.5 right-1.5 z-[2] w-7 h-7 rounded-sm bg-black/70 hover:bg-black/90 border-0 cursor-pointer flex items-center justify-center text-base"
+          className="absolute top-1.5 right-1.5 z-[2] w-8 h-8 rounded-sm bg-black/65 hover:bg-black/90 border-0 cursor-pointer flex items-center justify-center text-base transition-colors"
         >
           {favorited
             ? <StarFilled style={{ color: '#ff9000' }} />
             : <StarOutlined style={{ color: '#fff' }} />}
         </button>
+
+        {hasVideo && (
+          <span className="card-play absolute inset-0 z-[1] flex items-center justify-center pointer-events-none">
+            <span className="w-12 h-12 rounded-full bg-black/55 text-ph-orange flex items-center justify-center text-[36px] shadow-lg backdrop-blur-[2px]">
+              <PlayCircleFilled />
+            </span>
+          </span>
+        )}
+
         {hasVideo ? (
-          <span className="absolute bottom-1.5 right-1.5 bg-black/85 text-white text-[13px] font-bold px-1.5 py-0.5 rounded-sm">
+          <span className="absolute bottom-1.5 right-1.5 bg-black/80 text-white text-[12px] font-bold px-1.5 py-0.5 rounded-sm">
             <VideoCameraOutlined />
           </span>
         ) : (
-          <span className="absolute bottom-1.5 right-1.5 bg-zinc-700/85 text-zinc-300 text-[11px] font-bold px-1.5 py-0.5 rounded-sm">
+          <span className="absolute bottom-1.5 right-1.5 bg-zinc-800/90 text-zinc-400 text-[11px] font-semibold px-1.5 py-0.5 rounded-sm">
             无法播放
           </span>
         )}
       </div>
-      <div className="p-2">
-        <div className="line-clamp-2 text-[13px] leading-[1.4] text-ph-text-primary font-semibold min-h-[36px]">
+      <div className="p-2.5">
+        <div className="line-clamp-2 text-[13px] leading-[1.45] text-ph-text-primary font-semibold min-h-[38px]">
           {item.title || `条目 ${item.id}`}
         </div>
         <div className="flex gap-2 items-center text-[11px] text-ph-text-muted mt-1.5 flex-wrap">
@@ -111,6 +156,7 @@ const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFa
 });
 
 function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite }) {
+  const { message } = AntdApp.useApp();
   const [tags, setTags] = useState(item.tags || []);
   const [category, setCategory] = useState(item.category || null);
   const [datePublished, setDatePublished] = useState(item.datePublished || null);
@@ -127,15 +173,40 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
     if (newDate) setDatePublished(newDate);
   }, []);
 
+  const copyVideoUrl = useCallback(async () => {
+    const url = item.video && item.video.url;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      message.success('已复制视频地址');
+    } catch (_) {
+      message.info('无法自动复制，请从「视频地址」打开');
+    }
+  }, [item, message]);
+
   const hasVideo = !!(item.video && item.video.url);
   return (
     <Modal
       open={!!item}
       onCancel={onClose}
       footer={null}
-      width={1000}
+      width={Math.min(1000, typeof window !== 'undefined' ? window.innerWidth - 32 : 1000)}
       destroyOnClose
-      title={item.title || `条目 ${item.id}`}
+      centered
+      title={
+        <div className="flex items-start gap-3 pr-2">
+          <span className="flex-1 min-w-0 line-clamp-2">{item.title || `条目 ${item.id}`}</span>
+          <Tooltip title={favorited ? '取消收藏' : '加入收藏'}>
+            <Button
+              type="text"
+              size="small"
+              className="!shrink-0"
+              icon={favorited ? <StarFilled style={{ color: '#ff9000' }} /> : <StarOutlined />}
+              onClick={() => onToggleFavorite && onToggleFavorite(item)}
+            />
+          </Tooltip>
+        </div>
+      }
       className="player-modal"
     >
       {hasVideo ? (
@@ -172,14 +243,14 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
             <Space size={[6, 6]} wrap>
               {category && (
                 <Tooltip title={`搜索「${category}」`}>
-                  <Tag color="orange" className="cursor-pointer" onClick={() => onTagClick && onTagClick(category)}>
+                  <Tag color="orange" className="cursor-pointer !m-0" onClick={() => onTagClick && onTagClick(category)}>
                     {category}
                   </Tag>
                 </Tooltip>
               )}
               {tags.map((t) => (
                 <Tooltip key={t} title={`搜索「${t}」`}>
-                  <Tag className="cursor-pointer" onClick={() => onTagClick && onTagClick(t)}>
+                  <Tag className="cursor-pointer !m-0" onClick={() => onTagClick && onTagClick(t)}>
                     {t}
                   </Tag>
                 </Tooltip>
@@ -188,25 +259,24 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
           </div>
         )}
         <div className="flex gap-2 flex-wrap mt-3">
-          <Button
-            size="small"
-            icon={favorited ? <StarFilled /> : <StarOutlined />}
-            type={favorited ? 'primary' : 'default'}
-            onClick={() => onToggleFavorite && onToggleFavorite(item)}
-          >
-            {favorited ? '已收藏' : '收藏'}
-          </Button>
           {item.url && (
             <Button size="small" icon={<LinkOutlined />} href={item.url} target="_blank" rel="noreferrer">
               打开原文
             </Button>
           )}
           {hasVideo && (
-            <Tooltip title="复制到下载工具中使用">
-              <Button size="small" icon={<VideoCameraOutlined />} href={item.video.url} target="_blank" rel="noreferrer">
-                视频地址
-              </Button>
-            </Tooltip>
+            <>
+              <Tooltip title="复制 m3u8 地址到剪贴板">
+                <Button size="small" icon={<CopyOutlined />} onClick={copyVideoUrl}>
+                  复制地址
+                </Button>
+              </Tooltip>
+              <Tooltip title="在新标签打开原始地址">
+                <Button size="small" icon={<VideoCameraOutlined />} href={item.video.url} target="_blank" rel="noreferrer">
+                  视频地址
+                </Button>
+              </Tooltip>
+            </>
           )}
         </div>
       </div>
@@ -337,7 +407,6 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
     </div>
   );
 
-  // While syncing: hover shows progress. Click opens form only when idle.
   if (syncing) {
     return (
       <Popover
@@ -347,7 +416,7 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
         title="同步进度"
         mouseEnterDelay={0.1}
       >
-        <Button type="primary" size="middle" icon={<SyncOutlined />} loading>
+        <Button type="primary" size="middle" icon={<SyncOutlined className="sync-pulse" />} loading>
           同步中…
         </Button>
       </Popover>
@@ -370,8 +439,40 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
   );
 }
 
+function FilterStrip({ children }) {
+  const ref = useRef(null);
+  const [atStart, setAtStart] = useState(true);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const onScroll = () => setAtStart(el.scrollLeft < 8);
+    onScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className={`filter-strip ${atStart ? '' : 'is-start'} bg-ph-bg/90 border-b border-ph-border px-[22px] py-2 flex gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function chipClass(active) {
+  return `!rounded-[14px] !px-3 !py-1 !text-[13px] !border transition-colors ${
+    active
+      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold'
+      : '!bg-ph-border !text-ph-text-secondary !border-ph-border-light hover:!border-ph-orange/50'
+  }`;
+}
+
 export default function App() {
   const { message } = AntdApp.useApp();
+  const searchInputRef = useRef(null);
   const [items, setItems] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [favIds, setFavIds] = useState(() => new Set());
@@ -388,8 +489,8 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [loadingList, setLoadingList] = useState(false);
   const [lastQuery, setLastQuery] = useState('');
+  const [showTop, setShowTop] = useState(false);
 
-  const PAGE_SIZE = 60;
   const handleCardClick = useCallback((item) => setSelected(item), []);
 
   const loadFavorites = useCallback(async () => {
@@ -428,6 +529,27 @@ export default function App() {
     loadFavorites();
   }, [loadVideos, loadFavorites]);
 
+  // `/` focuses search; ignore when typing in inputs.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+      e.preventDefault();
+      const input = searchInputRef.current?.input || searchInputRef.current;
+      if (input && typeof input.focus === 'function') input.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    const onScroll = () => setShowTop(window.scrollY > 480);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   const handleToggleFavorite = useCallback(async (item) => {
     if (!item || !item.id) return;
     const isFav = favIds.has(item.id);
@@ -458,7 +580,7 @@ export default function App() {
             return [data.item, ...prev];
           });
         }
-        message.success('已加入收藏（写入 favorites.json，同步不会清空）');
+        message.success('已加入收藏');
       }
     } catch (e) {
       message.error(e.message);
@@ -501,7 +623,6 @@ export default function App() {
         (it) => it.category === activeTag || ((it.tags || []).includes(activeTag))
       );
     }
-    // Local query filter when viewing favorites (index search goes through API).
     if (showFavorites && lastQuery) {
       const qlc = lastQuery.toLowerCase();
       out = out.filter(
@@ -558,8 +679,8 @@ export default function App() {
         ? `正在同步第 ${pageStart} 页…`
         : `正在同步第 ${pageStart}–${pageEnd} 页…`));
     message.info({
-      content: '已开始后台同步，可继续浏览；请勿刷新或关闭页面',
-      duration: 4,
+      content: '已开始后台同步，可继续浏览；请勿刷新页面',
+      duration: 3,
     });
 
     try {
@@ -595,12 +716,11 @@ export default function App() {
         const matched = data.matched ?? (data.items || []).length;
         setSyncLogs(logTail + `\n完成：匹配 ${matched} 条，库内共 ${data.total} 条\n`);
         setStatus(`找到 ${matched} 条`);
-        message.success(matched > 0 ? `同步完成，找到 ${matched} 条` : '同步完成，未找到匹配内容');
+        message.success(matched > 0 ? `同步完成，找到 ${matched} 条` : '同步完成，未找到匹配');
       } else {
         setSyncLogs(logTail + `\n完成：新增 ${data.added} 条，更新 ${data.updated || 0} 条，库内共 ${data.total} 条\n`);
         setStatus(`已合并，共 ${data.total} 条（+${data.added}）`);
-        message.success(`同步完成：新增 ${data.added} 条，库内共 ${data.total} 条`);
-        // Refresh local list without touching the local search box.
+        message.success(`同步完成：+${data.added}，共 ${data.total} 条`);
         loadVideos(query.trim());
       }
     } catch (e) {
@@ -612,7 +732,6 @@ export default function App() {
     }
   };
 
-  // Block tab close / refresh while sync is in flight.
   useEffect(() => {
     if (!syncing) return undefined;
     const onBeforeUnload = (e) => {
@@ -636,6 +755,7 @@ export default function App() {
     setSelected(null);
     setActiveTag('');
     setActiveSite('');
+    setShowFavorites(false);
     message.info(`正在搜索「${tag}」`);
     setTimeout(() => loadVideos(tag), 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -684,7 +804,7 @@ export default function App() {
   const emptyDescription = (() => {
     if (loadingList) return '正在加载…';
     if (showFavorites) {
-      if (favorites.length === 0) return '还没有收藏。在卡片右上角点星星，可写入 favorites.json，同步资料不会清空。';
+      if (favorites.length === 0) return '还没有收藏。点卡片右上角星星即可收藏，同步不会清空。';
       if (hasFilter || lastQuery) return '当前筛选下没有收藏，试试清除筛选。';
       return '没有收藏。';
     }
@@ -705,9 +825,9 @@ export default function App() {
   })();
 
   return (
-    <Layout className="min-h-screen">
-      <div className="sticky top-0 z-10">
-        <Header className="flex items-center gap-3 h-[56px] !leading-[56px] px-[22px] bg-ph-header shadow-[0_2px_10px_rgba(0,0,0,.5)]">
+    <Layout className="min-h-screen app-shell">
+      <div className="sticky top-0 z-10 app-chrome">
+        <Header className="app-header flex items-center gap-3 h-[56px] !leading-[56px] px-[22px] bg-ph-header/95 shadow-[0_2px_10px_rgba(0,0,0,.5)]">
           <button
             type="button"
             onClick={resetHome}
@@ -718,8 +838,9 @@ export default function App() {
             <span className="text-black bg-ph-orange px-2 py-0.5 rounded ml-[3px]">资料</span>
           </button>
           <Input.Search
-            className="flex-1 min-w-0"
-            placeholder={showFavorites ? '在收藏中搜索…' : '搜索本地标题或编号…'}
+            ref={searchInputRef}
+            className="app-search flex-1 min-w-0"
+            placeholder={showFavorites ? '在收藏中搜索…  (/)' : '搜索本地标题或编号…  (/)'}
             value={query}
             allowClear
             onChange={(e) => setQuery(e.target.value)}
@@ -730,14 +851,15 @@ export default function App() {
               </Button>
             }
           />
-          <Tooltip title={showFavorites ? '返回资料库' : '只看收藏（独立 favorites.json）'}>
+          <Tooltip title={showFavorites ? '返回资料库' : '只看收藏'}>
             <Button
               size="middle"
               icon={showFavorites ? <StarFilled /> : <StarOutlined />}
               type={showFavorites ? 'primary' : 'default'}
               onClick={toggleFavoritesView}
             >
-              收藏{favorites.length > 0 ? ` ${favorites.length}` : ''}
+              <span className="hidden sm:inline">收藏</span>
+              {favorites.length > 0 ? ` ${favorites.length}` : ''}
             </Button>
           </Tooltip>
           {showFavorites && (
@@ -751,7 +873,7 @@ export default function App() {
               placement="bottomRight"
             >
               <Button size="middle" icon={<DownloadOutlined />} disabled={favorites.length === 0}>
-                下载收藏
+                <span className="hidden md:inline">下载</span>
               </Button>
             </Dropdown>
           )}
@@ -767,9 +889,9 @@ export default function App() {
             }}
             initialKeyword={syncPrefill}
           />
-          {status && (
+          {status && !syncing && (
             <span
-              className="hidden xl:inline-block text-xs text-ph-text-secondary bg-ph-bg border border-ph-border px-3 py-1 rounded-full max-w-[240px] overflow-hidden text-ellipsis whitespace-nowrap shrink-0"
+              className="hidden xl:inline-block text-xs text-ph-text-secondary bg-ph-bg border border-ph-border px-3 py-1 rounded-full max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap shrink-0"
               title={status}
             >
               {status}
@@ -777,14 +899,18 @@ export default function App() {
           )}
         </Header>
 
+        {syncing && (
+          <div className="sync-banner flex items-center gap-2 px-[22px] py-1.5 text-[12px] text-ph-orange bg-[#1a1408] border-b border-ph-orange/25">
+            <SyncOutlined spin className="sync-pulse" />
+            <span className="font-semibold shrink-0">{status || '正在同步…'}</span>
+            <span className="text-ph-text-muted truncate flex-1 min-w-0">可继续浏览 · 悬停「同步中」查看日志 · 请勿刷新</span>
+          </div>
+        )}
+
         {tagList.length > 0 && (
-          <div className="bg-ph-bg border-b border-ph-border px-[22px] py-2 flex gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <FilterStrip>
             <Tag.CheckableTag
-              className={`!rounded-[14px] !px-3 !py-1 !text-[13px] !border ${
-                !activeTag
-                  ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold'
-                  : '!bg-ph-border !text-ph-text-secondary !border-ph-border-light'
-              }`}
+              className={chipClass(!activeTag)}
               checked={!activeTag}
               onChange={() => { setActiveTag(''); setPage(1); }}
             >
@@ -793,28 +919,20 @@ export default function App() {
             {tagList.map((t) => (
               <Tag.CheckableTag
                 key={t}
-                className={`!rounded-[14px] !px-3 !py-1 !text-[13px] !border ${
-                  activeTag === t
-                    ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold'
-                    : '!bg-ph-border !text-ph-text-secondary !border-ph-border-light'
-                }`}
+                className={chipClass(activeTag === t)}
                 checked={activeTag === t}
                 onChange={() => handleFilterTag(t)}
               >
                 {t}
               </Tag.CheckableTag>
             ))}
-          </div>
+          </FilterStrip>
         )}
 
         {siteList.length > 1 && (
-          <div className="bg-ph-bg border-b border-ph-border px-[22px] py-2 flex gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <FilterStrip>
             <Tag.CheckableTag
-              className={`!rounded-[14px] !px-3 !py-1 !text-[13px] !border flex items-center gap-1 ${
-                !activeSite
-                  ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold'
-                  : '!bg-ph-border !text-ph-text-secondary !border-ph-border-light'
-              }`}
+              className={`${chipClass(!activeSite)} flex items-center gap-1`}
               checked={!activeSite}
               onChange={() => { setActiveSite(''); setPage(1); }}
             >
@@ -825,11 +943,7 @@ export default function App() {
               return (
                 <Tag.CheckableTag
                   key={key}
-                  className={`!rounded-[14px] !px-3 !py-1 !text-[13px] !border flex items-center gap-1 ${
-                    activeSite === key
-                      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold'
-                      : '!bg-ph-border !text-ph-text-secondary !border-ph-border-light'
-                  }`}
+                  className={`${chipClass(activeSite === key)} flex items-center gap-1`}
                   checked={activeSite === key}
                   onChange={() => handleFilterSite(key)}
                 >
@@ -839,11 +953,11 @@ export default function App() {
                 </Tag.CheckableTag>
               );
             })}
-          </div>
+          </FilterStrip>
         )}
 
         {(hasFilter || lastQuery || sourceItems.length > 0 || showFavorites) && (
-          <div className="bg-ph-bg/95 border-b border-ph-border px-[22px] py-1.5 flex items-center gap-3 text-[12px] text-ph-text-muted">
+          <div className="bg-ph-bg/95 border-b border-ph-border px-[22px] py-1.5 flex items-center gap-3 text-[12px] text-ph-text-muted flex-wrap">
             <span>
               {showFavorites
                 ? (hasFilter || lastQuery
@@ -852,6 +966,9 @@ export default function App() {
                 : (hasFilter
                   ? `筛选后 ${filtered.length} 条（库内 ${items.length} 条）`
                   : `共 ${filtered.length} 条`)}
+              {filtered.length > PAGE_SIZE && (
+                <span className="opacity-70"> · 第 {safePage}/{totalPages} 页</span>
+              )}
             </span>
             {hasFilter && (
               <Button
@@ -875,62 +992,91 @@ export default function App() {
                 显示全部
               </Button>
             )}
+            {showFavorites && (
+              <Button
+                type="link"
+                size="small"
+                icon={<CloseOutlined />}
+                className="!px-0 !h-auto"
+                onClick={toggleFavoritesView}
+              >
+                退出收藏
+              </Button>
+            )}
           </div>
         )}
       </div>
 
-      <Content className="px-[22px] py-[18px] pb-10">
-        <Spin spinning={loadingList} tip="正在加载…">
-          {filtered.length === 0 ? (
-            <Empty
-              image={<InboxOutlined style={{ fontSize: 64, color: '#555' }} />}
-              description={<Text type="secondary">{emptyDescription}</Text>}
-              className="!py-20"
-            >
-              {hasFilter && (
-                <Button type="primary" onClick={clearFilters}>清除筛选</Button>
-              )}
-              {!hasFilter && (
-                <Space>
-                  {lastQuery && <Button onClick={resetHome}>显示全部</Button>}
-                  <Button type="primary" icon={<SyncOutlined />} disabled={syncing} onClick={openSyncWithQuery}>
-                    同步资料
-                  </Button>
-                </Space>
-              )}
-            </Empty>
-          ) : (
-            <>
-              <div className="grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-                {paged.map((item) => (
-                  <VideoCard
-                    key={item.id}
-                    item={item}
-                    onClick={handleCardClick}
-                    favorited={favIds.has(item.id)}
-                    onToggleFavorite={handleToggleFavorite}
-                  />
-                ))}
-              </div>
-              {filtered.length > PAGE_SIZE && (
-                <div className="flex justify-center items-center gap-3 mt-6">
-                  <Pagination
-                    current={safePage}
-                    pageSize={PAGE_SIZE}
-                    total={filtered.length}
-                    onChange={(p) => {
-                      setPage(p);
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                    showSizeChanger={false}
-                    showTotal={(t, [from, to]) => `${from}–${to} / ${t}`}
-                  />
+      <Content className="px-[22px] py-[18px] pb-14">
+        {loadingList && items.length === 0 && !showFavorites ? (
+          <SkeletonGrid />
+        ) : (
+          <Spin spinning={loadingList && items.length > 0} tip="正在加载…">
+            {filtered.length === 0 ? (
+              <Empty
+                image={<InboxOutlined style={{ fontSize: 64, color: '#555' }} />}
+                description={<Text type="secondary">{emptyDescription}</Text>}
+                className="!py-20 rise-in"
+              >
+                {hasFilter && (
+                  <Button type="primary" onClick={clearFilters}>清除筛选</Button>
+                )}
+                {!hasFilter && (
+                  <Space>
+                    {lastQuery && <Button onClick={resetHome}>显示全部</Button>}
+                    <Button type="primary" icon={<SyncOutlined />} disabled={syncing} onClick={openSyncWithQuery}>
+                      同步资料
+                    </Button>
+                  </Space>
+                )}
+              </Empty>
+            ) : (
+              <>
+                <div className="grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+                  {paged.map((item, i) => (
+                    <VideoCard
+                      key={item.id}
+                      item={item}
+                      index={i}
+                      onClick={handleCardClick}
+                      favorited={favIds.has(item.id)}
+                      onToggleFavorite={handleToggleFavorite}
+                    />
+                  ))}
                 </div>
-              )}
-            </>
-          )}
-        </Spin>
+                {filtered.length > PAGE_SIZE && (
+                  <div className="flex justify-center items-center gap-3 mt-6">
+                    <Pagination
+                      current={safePage}
+                      pageSize={PAGE_SIZE}
+                      total={filtered.length}
+                      onChange={(p) => {
+                        setPage(p);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      showSizeChanger={false}
+                      showTotal={(t, [from, to]) => `${from}–${to} / ${t}`}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </Spin>
+        )}
       </Content>
+
+      {showTop && (
+        <Tooltip title="回到顶部" placement="left">
+          <button
+            type="button"
+            className="back-top"
+            aria-label="回到顶部"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          >
+            <VerticalAlignTopOutlined />
+          </button>
+        </Tooltip>
+      )}
 
       {selected && (
         <PlayerModal

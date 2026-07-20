@@ -96,10 +96,22 @@ function chinaDateStr(offsetDays = 0) {
   return new Date(t).toISOString().slice(0, 10);
 }
 
+// Convert an article ISO timestamp to China calendar YYYY-MM-DD.
+// IMPORTANT: do NOT use the UTC date prefix of the string — 51fans JSON-LD uses
+// UTC (e.g. 2026-07-19T23:00:00+00:00 = 2026-07-20 07:00 in China).
 function articleDateStr(iso) {
   if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!isNaN(t)) {
+    return new Date(t + 8 * 3600000).toISOString().slice(0, 10);
+  }
   const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : null;
+}
+
+// Prefer datePublished (content day); fall back to dateModified.
+function articleContentDateStr(article) {
+  return articleDateStr(article.datePublished) || articleDateStr(article.dateModified);
 }
 
 function searchUrl(site, keyword, pageNum) {
@@ -456,20 +468,21 @@ async function fetchTodayPerSiteWithFallback(log) {
   return aggregated;
 }
 
-// Keep articles whose dateModified matches the list source (today vs fallback).
+// Keep articles whose content date matches the list source (today vs fallback).
+// Uses China-local calendar day from datePublished (preferred) or dateModified.
 function filterArticlesByModifiedDate(articles, log) {
   const today = chinaDateStr(0);
   const yesterday = chinaDateStr(-1);
   const before = articles.length;
   for (let i = articles.length - 1; i >= 0; i--) {
     const a = articles[i];
-    const d = articleDateStr(a.dateModified);
-    if (!d) continue; // keep when dateModified unknown
+    const d = articleContentDateStr(a);
+    if (!d) continue; // keep when date unknown
     if (a._listSource === 'today' && d !== today) articles.splice(i, 1);
     else if (a._listSource === 'fallback' && d !== yesterday) articles.splice(i, 1);
   }
   if (before - articles.length > 0) {
-    log(`dateModified filter (today=${today}, yesterday=${yesterday}): removed ${before - articles.length}`);
+    log(`date filter (China today=${today}, yesterday=${yesterday}): removed ${before - articles.length}`);
   }
   articles.forEach((a) => { delete a._listSource; });
 }
