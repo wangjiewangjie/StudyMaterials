@@ -468,6 +468,99 @@ async function fetchTodayPerSiteWithFallback(log) {
   return aggregated;
 }
 
+// Fetch list pages per site until each site has contributed at least minArticles.
+// If a site has fewer articles after maxPages, it will return whatever was found.
+// Sites that return 0 new articles or hit 404 are marked as exhausted and skipped.
+async function fetchMinPerSite(minArticles, log, maxPages = 10) {
+  const siteArticles = {};
+  const siteIds = {};
+  const exhaustedSites = new Set();
+  SITES.forEach((site) => {
+    siteArticles[site] = [];
+    siteIds[site] = new Set();
+  });
+
+  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+    let allSitesMetOrExhausted = true;
+    const results = await Promise.allSettled(
+      SITES.map(async (site) => {
+        if (exhaustedSites.has(site)) return { site, exhausted: true };
+        if (siteIds[site].size >= minArticles) return { site, met: true };
+        log(`[minPerSite] ${site} page ${pageNum}`);
+        try {
+          const res = await getWithRetry(listPageUrl(site, pageNum), http, 3, headersFor(site));
+          const arts = parseListPage(res.data, site);
+          let newCount = 0;
+          for (const a of arts) {
+            if (!siteIds[site].has(a.id)) {
+              siteIds[site].add(a.id);
+              siteArticles[site].push(a);
+              newCount++;
+            }
+          }
+          if (newCount === 0) {
+            log(`  [${site}] page ${pageNum} -> 0 new articles, site exhausted`);
+            return { site, exhausted: true, newCount: 0, total: siteArticles[site].length };
+          }
+          return { site, met: false, newCount, total: siteArticles[site].length };
+        } catch (err) {
+          const is404 = err.response && err.response.status === 404;
+          if (is404) {
+            log(`  [${site}] page ${pageNum} -> 404, site exhausted`);
+          } else {
+            log(`  [${site}] FAILED page ${pageNum}: ${err.message}`);
+          }
+          return { site, exhausted: true };
+        }
+      })
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const site = SITES[i];
+      if (r.status === 'fulfilled') {
+        const v = r.value;
+        if (v.exhausted) {
+          if (!exhaustedSites.has(site)) {
+            exhaustedSites.add(site);
+            log(`  [${site}] marked as exhausted (${siteArticles[site].length} articles)`);
+          }
+        } else if (v.met) {
+          // site already met minimum
+        } else {
+          log(`  [${site}] page ${pageNum} -> ${v.newCount} new, total ${v.total}`);
+        }
+        // Check if site still needs more articles
+        if (!exhaustedSites.has(site) && siteIds[site].size < minArticles) {
+          allSitesMetOrExhausted = false;
+        }
+      } else {
+        // Should not happen since we catch errors inside
+        allSitesMetOrExhausted = false;
+      }
+    }
+
+    if (allSitesMetOrExhausted) {
+      log(`All sites met minimum ${minArticles} articles or exhausted at page ${pageNum}`);
+      break;
+    }
+    if (pageNum < maxPages) await sleep(150);
+  }
+
+  const aggregated = [];
+  const seenIds = new Set();
+  for (const site of SITES) {
+    log(`[minPerSite] ${site}: ${siteArticles[site].length} articles`);
+    for (const a of siteArticles[site]) {
+      if (!seenIds.has(a.id)) {
+        seenIds.add(a.id);
+        aggregated.push(a);
+      }
+    }
+  }
+  return aggregated;
+}
+
 // Keep articles whose content date matches the list source (today vs fallback).
 // Uses China-local calendar day from datePublished (preferred) or dateModified.
 function filterArticlesByModifiedDate(articles, log) {
@@ -494,7 +587,8 @@ function filterArticlesByModifiedDate(articles, log) {
 //   search               search keyword (overrides pages)
 //   searchPages          how many search result pages (default 1)
 //   todayOnly            startup mode: only 今日 per site (+ per-site fallback), no list pages
-//   replace              replace index.json entirely (default: true only when todayOnly)
+//   minPerSite           minimum articles per site (overrides todayOnly list fetching)
+//   replace              replace index.json entirely (default: true when todayOnly or minPerSite)
 //   limit                max articles (default 0 = all)
 //   outDir               output directory
 //   concurrency         detail workers (default 3)
@@ -506,11 +600,12 @@ async function crawl(opts = {}) {
   const searchKeyword = opts.search || null;
   const searchPages = opts.searchPages || 1;
   const todayOnly = !!opts.todayOnly;
-  // Startup (todayOnly) replaces; UI sync merges/pushes unless replace:true.
-  const replace = opts.replace != null ? !!opts.replace : todayOnly;
+  const minPerSite = opts.minPerSite || 0;
+  // Startup modes (todayOnly/minPerSite) replace; UI sync merges/pushes unless replace:true.
+  const replace = opts.replace != null ? !!opts.replace : (todayOnly || minPerSite > 0);
   const limit = opts.limit || 0;
   const outDir = path.resolve(opts.outDir || './output');
-  const concurrency = opts.concurrency || 3;
+  const concurrency = opts.concurrency || 6;
   const jsonPath = path.resolve(opts.jsonPath || path.join(outDir, 'index.json'));
   const log = typeof opts.onLog === 'function' ? opts.onLog : (m) => console.log(m);
 
@@ -518,9 +613,11 @@ async function crawl(opts = {}) {
 
   const mode = searchKeyword
     ? { type: 'search', keyword: searchKeyword, label: `search "${searchKeyword}" pages 1..${searchPages}` }
-    : todayOnly
-      ? { type: 'list', label: 'today only (per-site fallback)' }
-      : { type: 'list', label: `pages ${pageStart}..${pageEnd}` };
+    : minPerSite > 0
+      ? { type: 'list', label: `min ${minPerSite} per site` }
+      : todayOnly
+        ? { type: 'list', label: 'today only (per-site fallback)' }
+        : { type: 'list', label: `pages ${pageStart}..${pageEnd}` };
   log(`=== crawler start | ${mode.label} | ${SITES.length} sites ===`);
 
   const newArticles = [];
@@ -530,19 +627,26 @@ async function crawl(opts = {}) {
   };
 
   if (mode.type === 'list') {
-    log('--- Fetching 今日 (per-site, fallback if empty) ---');
-    const todayArts = await fetchTodayPerSiteWithFallback(log);
-    for (const a of todayArts) addUnique(a);
-    log(`Today+fallback: ${todayArts.length} articles`);
+    if (minPerSite > 0) {
+      log(`--- Fetching minimum ${minPerSite} articles per site ---`);
+      const minArts = await fetchMinPerSite(minPerSite, log);
+      for (const a of minArts) addUnique(a);
+      log(`Min per site: ${minArts.length} articles`);
+    } else {
+      log('--- Fetching 今日 (per-site, fallback if empty) ---');
+      const todayArts = await fetchTodayPerSiteWithFallback(log);
+      for (const a of todayArts) addUnique(a);
+      log(`Today+fallback: ${todayArts.length} articles`);
+    }
   }
 
-  if (!todayOnly) {
+  if (!todayOnly && minPerSite === 0) {
     const totalPages = searchKeyword ? searchPages : (pageEnd - pageStart + 1);
     for (let i = 0; i < totalPages; i++) {
       const pageNum = searchKeyword ? (i + 1) : (pageStart + i);
       const arts = await fetchListPageFromAllSites(pageNum, log, mode);
       for (const a of arts) addUnique(a);
-      if (i < totalPages - 1) await sleep(300);
+      if (i < totalPages - 1) await sleep(150);
     }
   }
 
@@ -598,7 +702,7 @@ async function crawl(opts = {}) {
     } catch (err) {
       log(`  [detail] ${a.id} failed: ${err.message}`);
     }
-    await sleep(150);
+    await sleep(80);
   });
 
   // Post-filter by tags (only available after detail parse).
@@ -612,7 +716,7 @@ async function crawl(opts = {}) {
 
   if (todayOnly) {
     filterArticlesByModifiedDate(newArticles, log);
-  } else {
+  } else if (minPerSite === 0) {
     newArticles.forEach((a) => { delete a._listSource; });
   }
 
@@ -682,4 +786,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { crawl, parseDetailPage, resolvePlayerUrl, loadIndex, BASE_URL, SITES };
+module.exports = { crawl, parseDetailPage, resolvePlayerUrl, loadIndex, mergeIntoIndex, BASE_URL, SITES, UA };

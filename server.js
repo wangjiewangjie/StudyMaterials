@@ -10,7 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const axios = require('axios');
-const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, BASE_URL } = require('./crawler');
+const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, BASE_URL, UA } = require('./crawler');
 const { decryptBuffer } = require('./imageDecrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hlsUrl');
 
@@ -36,7 +36,6 @@ const OUT_DIR = path.resolve(__dirname, 'output');
 const JSON_PATH = path.join(OUT_DIR, 'index.json');
 const FAV_PATH = path.join(OUT_DIR, 'favorites.json');
 const BUILD_DIR = path.join(__dirname, 'public', 'build');
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS, 10) || 90000;
 const REFRESH_TIMEOUT_MS = parseInt(process.env.REFRESH_TIMEOUT_MS, 10) || 60000;
 
@@ -480,6 +479,54 @@ app.post('/api/search-online', async (req, res) => {
   }
 });
 
+// Tag sync: crawl multiple tags sequentially, merge results into index.
+app.post('/api/sync-tags', async (req, res) => {
+  const tags = (req.body && req.body.tags) || [];
+  if (!Array.isArray(tags) || tags.length === 0) return res.status(400).json({ error: 'tags array required' });
+  const searchPages = parseInt(req.body && req.body.pages, 10) || 1;
+  const logs = [`开始同步 ${tags.length} 个标签: ${tags.join(', ')}`];
+  try {
+    // Capture baseline count before crawling
+    const existingIndex = loadIndex(JSON_PATH);
+    const baselineCount = existingIndex.length;
+
+    // Run tag searches sequentially to avoid race condition on index.json
+    let totalAdded = 0;
+    for (const tag of tags) {
+      const tagLogs = [];
+      try {
+        tagLogs.push(`[${tag}] 开始搜索...`);
+        const result = await crawl({
+          search: tag,
+          searchPages,
+          replace: false,
+          outDir: OUT_DIR,
+          jsonPath: JSON_PATH,
+          concurrency: 3,
+          onLog: (m) => tagLogs.push(m),
+        });
+        totalAdded += result.added;
+        tagLogs.push(`[${tag}] 完成: +${result.added} 条`);
+      } catch (err) {
+        tagLogs.push(`[${tag}] 失败: ${err.message}`);
+      }
+      logs.push(...tagLogs);
+    }
+
+    // Load final result and calculate actual additions
+    indexCache = null;
+    indexMtimeMs = -1;
+    const currentIndex = loadIndex(JSON_PATH);
+    const actualAdded = currentIndex.length - baselineCount;
+    const withVideo = currentIndex.filter((a) => a.video && a.video.url).length;
+    logs.push(`同步完成: +${actualAdded} 新增，共 ${currentIndex.length} 条 (${withVideo} 有视频)`);
+
+    res.json({ ok: true, added: actualAdded, updated: 0, total: currentIndex.length, logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message, logs });
+  }
+});
+
 // Crawl list pages (for the "crawl more" button).
 app.post('/api/crawl', async (req, res) => {
   const pageStart = parseInt(req.body && req.body.pageStart, 10) || 1;
@@ -518,13 +565,12 @@ app.get('*', (req, res) => {
     }
     console.log(`已加载 ${getIndex().length} 条记录，收藏 ${getFavorites().length} 条`);
 
-    // Startup: per-site 今日 only; if a site has zero today articles, fall back
-    // to its list page 1 (previous day). Does not crawl regular list pages.
+    // Startup: crawl minimum 50 articles per site
     (async () => {
       try {
-        console.log('启动爬取：各站点今日（无则回退前一日）...');
+        console.log('启动爬取：各站点最少50条...');
         await crawl({
-          todayOnly: true,
+          minPerSite: 50,
           replace: true,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,

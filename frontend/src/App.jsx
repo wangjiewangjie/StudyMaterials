@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import {
   Layout, Input, Button, Card, Tag, Modal, Empty, Spin, Typography,
-  Space, Popover, InputNumber, Pagination, App as AntdApp, Tooltip, Dropdown,
+  Space, Popover, InputNumber, Pagination, App as AntdApp, Tooltip, Dropdown, Select,
 } from 'antd';
 import {
   SearchOutlined, SyncOutlined, LinkOutlined,
   VideoCameraOutlined, InboxOutlined, GlobalOutlined,
   CalendarOutlined, ClearOutlined, ReloadOutlined,
   StarOutlined, StarFilled, DownloadOutlined, PlayCircleFilled,
-  CopyOutlined, VerticalAlignTopOutlined, CloseOutlined,
+  CopyOutlined, VerticalAlignTopOutlined, CloseOutlined, TagsOutlined,
 } from '@ant-design/icons';
 import VideoPlayer from './VideoPlayer.jsx';
 
@@ -38,6 +38,16 @@ function formatDate(iso) {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
+// 通用 POST JSON 请求辅助函数
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
 }
 
 function SkeletonGrid({ count = 12 }) {
@@ -297,7 +307,9 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
   const setOpen = onOpenChange || setOpenLocal;
 
   const kw = keyword.trim();
-  const isSearch = !!kw;
+  const keywords = kw ? kw.split(/[,，]/).map((k) => k.trim()).filter((k) => k) : [];
+  const isSearch = keywords.length > 0;
+  const isMultiTag = keywords.length > 1;
 
   useEffect(() => {
     if (open && initialKeyword) setKeyword(initialKeyword);
@@ -318,28 +330,40 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
       setPageStart(a);
       setPageEnd(b);
     }
-    onSync({
-      keyword: kw || null,
-      pageStart: a,
-      pageEnd: b,
-      pages: isSearch ? (b - a + 1) : undefined,
-    });
+    if (isMultiTag) {
+      // 多标签并行同步
+      onSync({
+        tags: keywords,
+        pages: b - a + 1,
+        pageStart: a,
+        pageEnd: b,
+      });
+    } else {
+      onSync({
+        keyword: keywords[0] || null,
+        pageStart: a,
+        pageEnd: b,
+        pages: isSearch ? (b - a + 1) : undefined,
+      });
+    }
   };
 
   const formContent = (
     <div className="w-[340px]">
       <Text type="secondary" className="text-[12px] block mb-3 leading-relaxed">
-        {isSearch
-          ? `将按关键词「${kw}」在各站点搜索并同步到本地。`
-          : '未填关键词时，抓取各站「今日」与列表页，刷新本地资料库。'}
-        <span className="block mt-1.5 opacity-80">开始后可继续浏览与本地搜索；请勿刷新页面。</span>
+        {isMultiTag
+          ? `将按 ${keywords.length} 个关键词并行搜索同步: ${keywords.slice(0, 3).join('、')}${keywords.length > 3 ? '...' : ''}`
+          : isSearch
+            ? `将按关键词「${keywords[0]}」在各站点搜索并同步到本地。`
+            : '未填关键词时，抓取各站「今日」与列表页，刷新本地资料库。'}
+        <span className="block mt-1.5 opacity-80">支持逗号分隔多关键词（如: 标签1,标签2,标签3），开始后可继续浏览与本地搜索。</span>
       </Text>
       <div className="mb-3">
-        <Text type="secondary" className="text-[12px] block mb-1">同步关键词（选填，与本地搜索独立）</Text>
+        <Text type="secondary" className="text-[12px] block mb-1">同步关键词（选填，逗号分隔支持多标签）</Text>
         <Input
           size="small"
           allowClear
-          placeholder="填写则全网搜索同步，留空则抓最新列表"
+          placeholder="填写则全网搜索同步，多个标签用逗号分隔"
           value={keyword}
           disabled={syncing}
           onChange={(e) => setKeyword(e.target.value)}
@@ -386,7 +410,7 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
         )}
       </div>
       <Button type="primary" size="small" block loading={syncing} icon={<SyncOutlined />} onClick={start}>
-        {syncing ? '正在同步…' : (isSearch ? '搜索并同步' : '抓取并同步')}
+        {syncing ? '正在同步…' : (isMultiTag ? `同步 ${keywords.length} 个标签` : (isSearch ? '搜索并同步' : '抓取并同步'))}
       </Button>
       {logs && !syncing && (
         <pre ref={logRef} className="bg-black border border-ph-border rounded p-2 mt-3 font-mono text-[11px] max-h-[180px] overflow-auto text-ph-text-tertiary whitespace-pre-wrap leading-[1.5]">
@@ -440,22 +464,9 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
 }
 
 function FilterStrip({ children }) {
-  const ref = useRef(null);
-  const [atStart, setAtStart] = useState(true);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return undefined;
-    const onScroll = () => setAtStart(el.scrollLeft < 8);
-    onScroll();
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
-
   return (
     <div
-      ref={ref}
-      className={`filter-strip ${atStart ? '' : 'is-start'} bg-ph-bg/90 border-b border-ph-border px-[22px] py-2 flex gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
+      className="filter-strip bg-ph-bg/90 border-b border-ph-border px-[22px] py-2 flex gap-2 flex-wrap items-center"
     >
       {children}
     </div>
@@ -463,11 +474,41 @@ function FilterStrip({ children }) {
 }
 
 function chipClass(active) {
-  return `!rounded-[14px] !px-3 !py-1 !text-[13px] !border transition-colors ${
+  return `!rounded-lg !px-2.5 !py-[5px] !text-[12px] !border !leading-none transition-all ${
     active
-      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold'
-      : '!bg-ph-border !text-ph-text-secondary !border-ph-border-light hover:!border-ph-orange/50'
+      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold shadow-sm'
+      : '!bg-ph-border/60 !text-ph-text-secondary !border-ph-border hover:!border-ph-orange/60 hover:!bg-ph-border'
   }`;
+}
+
+// 通用过滤芯片条组件
+function FilterChipStrip({ items, activeKey, onSelect, allLabel, extra, renderItem, itemKey }) {
+  return (
+    <FilterStrip>
+      <Tag.CheckableTag
+        className={chipClass(!activeKey)}
+        checked={!activeKey}
+        onChange={() => onSelect('')}
+      >
+        {allLabel}
+      </Tag.CheckableTag>
+      {items.map((item) => {
+        const key = itemKey ? itemKey(item) : item.key;
+        const isActive = activeKey === key;
+        return (
+          <Tag.CheckableTag
+            key={key}
+            className={`${chipClass(isActive)} flex items-center gap-1`}
+            checked={isActive}
+            onChange={() => onSelect(key)}
+          >
+            {renderItem ? renderItem(item, isActive) : <span>{item.label}</span>}
+          </Tag.CheckableTag>
+        );
+      })}
+      {extra}
+    </FilterStrip>
+  );
 }
 
 export default function App() {
@@ -490,6 +531,8 @@ export default function App() {
   const [loadingList, setLoadingList] = useState(false);
   const [lastQuery, setLastQuery] = useState('');
   const [showTop, setShowTop] = useState(false);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
+  const TAG_COLLAPSED_COUNT = 12;
 
   const handleCardClick = useCallback((item) => setSelected(item), []);
 
@@ -597,7 +640,7 @@ export default function App() {
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 40)
-      .map(([t]) => t);
+      .map(([tag, count]) => ({ tag, count }));
   }, [sourceItems]);
 
   const siteList = useMemo(() => {
@@ -611,7 +654,8 @@ export default function App() {
       .sort((a, b) => b.count - a.count);
   }, [sourceItems]);
 
-  const filtered = useMemo(() => {
+  // 过滤 + 排序：仅在筛选条件变化时重新计算
+  const sortedFiltered = useMemo(() => {
     let out = sourceItems;
     if (activeSite) {
       out = out.filter((it) =>
@@ -644,12 +688,14 @@ export default function App() {
     });
   }, [sourceItems, activeTag, activeSite, showFavorites, lastQuery]);
 
+  // 分页切片：仅在排序结果或页码变化时重新计算
   const hasFilter = !!(activeTag || activeSite);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(sortedFiltered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
+  const filtered = sortedFiltered; // 保持向后兼容
   const paged = useMemo(
-    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
-    [filtered, safePage]
+    () => sortedFiltered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [sortedFiltered, safePage]
   );
 
   const handleLocalSearch = () => {
@@ -664,42 +710,42 @@ export default function App() {
     loadVideos(query.trim());
   };
 
-  const handleSync = async ({ keyword, pageStart, pageEnd, pages }) => {
+  const handleSync = useCallback(async ({ keyword, pageStart, pageEnd, pages, tags }) => {
     setSyncing(true);
     setSyncOpen(false);
     setActiveTag('');
     setActiveSite('');
     setPage(1);
 
+    const isTagSync = Array.isArray(tags) && tags.length > 0;
     const isSearch = !!keyword;
-    setSyncLogs(isSearch ? `开始搜索「${keyword}」…\n` : '开始抓取列表…\n');
-    setStatus(isSearch
-      ? `正在同步搜索「${keyword}」…`
-      : (pageStart === pageEnd
-        ? `正在同步第 ${pageStart} 页…`
-        : `正在同步第 ${pageStart}–${pageEnd} 页…`));
-    message.info({
-      content: '已开始后台同步，可继续浏览；请勿刷新页面',
-      duration: 3,
-    });
+    setSyncLogs(
+      isTagSync
+        ? `开始同步 ${tags.length} 个标签: ${tags.join(', ')}\n`
+        : isSearch
+          ? `开始搜索「${keyword}」…\n`
+          : '开始抓取列表…\n'
+    );
+    setStatus(
+      isTagSync
+        ? `正在同步 ${tags.length} 个标签…`
+        : isSearch
+          ? `正在同步搜索「${keyword}」…`
+          : (pageStart === pageEnd
+            ? `正在同步第 ${pageStart} 页…`
+            : `正在同步第 ${pageStart}–${pageEnd} 页…`)
+    );
+    message.info({ content: '已开始后台同步，可继续浏览；请勿刷新页面', duration: 3 });
 
     try {
-      let data;
-      if (isSearch) {
-        const res = await fetch('/api/search-online', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword, pages: pages || 1 }),
-        });
-        data = await res.json();
-      } else {
-        const res = await fetch('/api/crawl', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pageStart, pageEnd }),
-        });
-        data = await res.json();
-      }
+      // 统一的请求路由
+      const [endpoint, body] = isTagSync
+        ? ['/api/sync-tags', { tags, pages: pages || 1 }]
+        : isSearch
+          ? ['/api/search-online', { keyword, pages: pages || 1 }]
+          : ['/api/crawl', { pageStart, pageEnd }];
+
+      const data = await postJSON(endpoint, body);
 
       if (data.error) {
         setSyncLogs((p) => p + '失败：' + data.error + '\n');
@@ -709,16 +755,22 @@ export default function App() {
       }
 
       const logTail = (data.logs || []).join('\n');
-      if (isSearch) {
+
+      if (isTagSync) {
+        setSyncLogs(logTail + `\n完成：+${data.added} 新增，共 ${data.total} 条\n`);
+        setStatus(`标签同步完成，共 ${data.total} 条`);
+        message.success(`标签同步完成：+${data.added}，共 ${data.total} 条`);
+        loadVideos(query.trim());
+      } else if (isSearch) {
+        const matched = data.matched ?? (data.items || []).length;
         setItems(data.items || []);
         setShowFavorites(false);
         setLastQuery(keyword);
-        const matched = data.matched ?? (data.items || []).length;
         setSyncLogs(logTail + `\n完成：匹配 ${matched} 条，库内共 ${data.total} 条\n`);
         setStatus(`找到 ${matched} 条`);
         message.success(matched > 0 ? `同步完成，找到 ${matched} 条` : '同步完成，未找到匹配');
       } else {
-        setSyncLogs(logTail + `\n完成：新增 ${data.added} 条，更新 ${data.updated || 0} 条，库内共 ${data.total} 条\n`);
+        setSyncLogs(logTail + `\n完成：新增 ${data.added} 条，库内共 ${data.total} 条\n`);
         setStatus(`已合并，共 ${data.total} 条（+${data.added}）`);
         message.success(`同步完成：+${data.added}，共 ${data.total} 条`);
         loadVideos(query.trim());
@@ -730,7 +782,7 @@ export default function App() {
     } finally {
       setSyncing(false);
     }
-  };
+  }, [message, loadVideos, query]);
 
   useEffect(() => {
     if (!syncing) return undefined;
@@ -834,7 +886,10 @@ export default function App() {
             className="flex items-center gap-2 shrink-0 cursor-pointer bg-transparent border-0 p-0 hover:opacity-90 transition-opacity"
             title="返回全部资料"
           >
-            <img src="/logo.svg" alt="学习资料" width="100" height="100" className="block" />
+            <span className="flex items-center gap-1.5">
+              <span className="text-ph-text-secondary font-bold text-lg whitespace-nowrap">学习</span>
+              <span className="bg-ph-orange text-black font-bold text-sm px-2 py-0.5 rounded-sm whitespace-nowrap">资料</span>
+            </span>
           </button>
           <Input.Search
             ref={searchInputRef}
@@ -906,102 +961,170 @@ export default function App() {
           </div>
         )}
 
-        {tagList.length > 0 && (
-          <FilterStrip>
-            <Tag.CheckableTag
-              className={chipClass(!activeTag)}
-              checked={!activeTag}
-              onChange={() => { setActiveTag(''); setPage(1); }}
-            >
-              全部标签
-            </Tag.CheckableTag>
-            {tagList.map((t) => (
-              <Tag.CheckableTag
-                key={t}
-                className={chipClass(activeTag === t)}
-                checked={activeTag === t}
-                onChange={() => handleFilterTag(t)}
-              >
-                {t}
-              </Tag.CheckableTag>
-            ))}
-          </FilterStrip>
-        )}
-
-        {siteList.length > 1 && (
-          <FilterStrip>
-            <Tag.CheckableTag
-              className={`${chipClass(!activeSite)} flex items-center gap-1`}
-              checked={!activeSite}
-              onChange={() => { setActiveSite(''); setPage(1); }}
-            >
-              全部来源
-            </Tag.CheckableTag>
-            {siteList.map((s) => {
-              const key = s.site || '__unknown__';
-              return (
-                <Tag.CheckableTag
-                  key={key}
-                  className={`${chipClass(activeSite === key)} flex items-center gap-1`}
-                  checked={activeSite === key}
-                  onChange={() => handleFilterSite(key)}
+        {/* 一体化筛选控制栏 */}
+        {(tagList.length > 0 || siteList.length > 1 || hasFilter || lastQuery || sourceItems.length > 0 || showFavorites) && (
+          <div className="bg-ph-bg/95 border-b border-ph-border">
+            {/* 已选筛选 chip 快速清除 */}
+            {(activeTag || activeSite || (showFavorites && lastQuery)) && (
+              <div className="flex items-center gap-2 px-[22px] pt-2 pb-1 text-[12px] flex-wrap">
+                <span className="text-ph-text-muted shrink-0">已选：</span>
+                {activeTag && (
+                  <Tag
+                    closable
+                    onClose={(e) => { e.preventDefault(); handleFilterTag(activeTag); }}
+                    className="!bg-ph-orange/15 !text-ph-orange !border-ph-orange/40 !rounded-md !m-0"
+                    icon={<TagsOutlined style={{ fontSize: 10 }} />}
+                  >
+                    {activeTag}
+                  </Tag>
+                )}
+                {activeSite && (
+                  <Tag
+                    closable
+                    onClose={(e) => { e.preventDefault(); handleFilterSite(activeSite); }}
+                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded-md !m-0"
+                    icon={<GlobalOutlined style={{ fontSize: 10 }} />}
+                  >
+                    {siteLabel(activeSite === '__unknown__' ? null : activeSite)}
+                  </Tag>
+                )}
+                {showFavorites && lastQuery && (
+                  <Tag
+                    closable
+                    onClose={(e) => { e.preventDefault(); setLastQuery(''); }}
+                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded-md !m-0"
+                  >
+                    搜索「{lastQuery}」
+                  </Tag>
+                )}
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<ClearOutlined />}
+                  className="!px-1 !text-[11px] !h-auto !min-h-0 !py-0"
+                  onClick={clearFilters}
                 >
-                  <GlobalOutlined />
-                  {s.label}
-                  <span className="opacity-60 text-[11px]">{s.count}</span>
-                </Tag.CheckableTag>
-              );
-            })}
-          </FilterStrip>
-        )}
+                  全部清除
+                </Button>
+              </div>
+            )}
 
-        {(hasFilter || lastQuery || sourceItems.length > 0 || showFavorites) && (
-          <div className="bg-ph-bg/95 border-b border-ph-border px-[22px] py-1.5 flex items-center gap-3 text-[12px] text-ph-text-muted flex-wrap">
-            <span>
-              {showFavorites
-                ? (hasFilter || lastQuery
-                  ? `收藏筛选 ${filtered.length} 条（共 ${favorites.length} 条）`
-                  : `收藏 ${filtered.length} 条`)
-                : (hasFilter
-                  ? `筛选后 ${filtered.length} 条（库内 ${items.length} 条）`
-                  : `共 ${filtered.length} 条`)}
-              {filtered.length > PAGE_SIZE && (
-                <span className="opacity-70"> · 第 {safePage}/{totalPages} 页</span>
+            {/* 标签 + 来源 + 统计 一行 */}
+            <div className="flex flex-col sm:flex-row sm:items-start gap-2 px-[22px] py-2">
+              {/* 标签区 */}
+              {tagList.length > 0 && (
+                <div className="flex-1 flex items-start gap-2 min-w-0 flex-wrap">
+                  <span className="text-[12px] text-ph-text-muted shrink-0 pt-[3px] whitespace-nowrap">标签</span>
+                  <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+                    <Tag.CheckableTag
+                      className={chipClass(!activeTag)}
+                      checked={!activeTag}
+                      onChange={() => { setActiveTag(''); setPage(1); }}
+                    >
+                      全部
+                    </Tag.CheckableTag>
+                    {(tagsExpanded ? tagList : tagList.slice(0, TAG_COLLAPSED_COUNT)).map(({ tag, count }) => {
+                      const isActive = activeTag === tag;
+                      return (
+                        <Tag.CheckableTag
+                          key={tag}
+                          className={`${chipClass(isActive)} flex items-center gap-1`}
+                          checked={isActive}
+                          onChange={() => handleFilterTag(tag)}
+                        >
+                          <span>{tag}</span>
+                          <span className={`text-[10px] ${isActive ? 'opacity-70' : 'opacity-40'}`}>{count}</span>
+                          <Tooltip title={`同步标签「${tag}」`}>
+                            <span
+                              role="button"
+                              className={`inline-flex items-center rounded-sm px-0.5 ${isActive ? 'bg-black/10 text-black/80 hover:bg-black/20' : 'bg-ph-border-light/40 text-ph-text-muted hover:bg-ph-orange/30 hover:text-ph-orange'} transition-colors cursor-pointer`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                if (syncing) return;
+                                handleSync({ tags: [tag], pages: 1 });
+                              }}
+                            >
+                              <SyncOutlined style={{ fontSize: 10 }} />
+                            </span>
+                          </Tooltip>
+                        </Tag.CheckableTag>
+                      );
+                    })}
+                    {tagList.length > TAG_COLLAPSED_COUNT && (
+                      <Button
+                        type="text"
+                        size="small"
+                        className="!h-[22px] !px-1.5 !text-[11px] !text-ph-text-muted hover:!text-ph-orange !rounded-md"
+                        onClick={() => setTagsExpanded((v) => !v)}
+                      >
+                        {tagsExpanded ? '收起' : `+${tagList.length - TAG_COLLAPSED_COUNT}`}
+                      </Button>
+                    )}
+                  </div>
+                </div>
               )}
-            </span>
-            {hasFilter && (
-              <Button
-                type="link"
-                size="small"
-                icon={<ClearOutlined />}
-                className="!px-0 !h-auto"
-                onClick={clearFilters}
-              >
-                清除筛选
-              </Button>
-            )}
-            {lastQuery && !hasFilter && !showFavorites && (
-              <Button
-                type="link"
-                size="small"
-                icon={<ReloadOutlined />}
-                className="!px-0 !h-auto"
-                onClick={resetHome}
-              >
-                显示全部
-              </Button>
-            )}
-            {showFavorites && (
-              <Button
-                type="link"
-                size="small"
-                icon={<CloseOutlined />}
-                className="!px-0 !h-auto"
-                onClick={toggleFavoritesView}
-              >
-                退出收藏
-              </Button>
-            )}
+
+              {/* 右侧操作区：来源 + 同步热门 + 统计信息 */}
+              <div className="flex items-center gap-2 flex-wrap sm:ml-auto sm:shrink-0">
+                {/* 来源筛选下拉 */}
+                {siteList.length > 1 && (
+                  <Select
+                    size="small"
+                    style={{ minWidth: 120 }}
+                    value={activeSite || undefined}
+                    placeholder="全部来源"
+                    allowClear
+                    onChange={(val) => { setActiveSite(val || ''); setPage(1); }}
+                    options={siteList.map((s) => ({
+                      value: s.site || '__unknown__',
+                      label: `${s.label} (${s.count})`,
+                    }))}
+                    classNames={{
+                      root: 'filter-site-select',
+                    }}
+                  />
+                )}
+                {/* 同步热门按钮 */}
+                {tagList.length > 0 && (
+                  <Tooltip title="同步前5个热门标签">
+                    <Button
+                      size="small"
+                      type="default"
+                      icon={<SyncOutlined />}
+                      disabled={syncing}
+                      onClick={() => handleSync({ tags: tagList.slice(0, 5).map((t) => t.tag), pages: 1 })}
+                    >
+                      同步热门
+                    </Button>
+                  </Tooltip>
+                )}
+                {/* 统计信息 chip */}
+                <Tag
+                  className="!rounded-md !m-0 !bg-ph-border/40 !border-ph-border !text-ph-text-secondary"
+                >
+                  {showFavorites
+                    ? `收藏 ${filtered.length}${favorites.length > filtered.length ? `/${favorites.length}` : ''}`
+                    : (hasFilter
+                      ? `${filtered.length}/${items.length}`
+                      : `${filtered.length} 条`)}
+                  {filtered.length > PAGE_SIZE && (
+                    <span className="opacity-70 ml-1">· {safePage}/{totalPages}</span>
+                  )}
+                </Tag>
+                {/* 显示全部 / 退出收藏 */}
+                {lastQuery && !hasFilter && !showFavorites && (
+                  <Button size="small" type="text" icon={<ReloadOutlined />} onClick={resetHome}>
+                    全部
+                  </Button>
+                )}
+                {showFavorites && (
+                  <Button size="small" type="text" icon={<CloseOutlined />} onClick={toggleFavoritesView}>
+                    退出收藏
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>
