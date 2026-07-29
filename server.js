@@ -500,6 +500,7 @@ app.post('/api/sync-tags', async (req, res) => {
           search: tag,
           searchPages,
           replace: false,
+          limit: 50,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
           concurrency: 3,

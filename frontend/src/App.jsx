@@ -1023,26 +1023,25 @@ export default function App() {
                     >
                       全部
                     </Tag.CheckableTag>
-                    {(tagsExpanded ? tagList : tagList.slice(0, TAG_COLLAPSED_COUNT)).map(({ tag, count }) => {
+                    {(tagsExpanded ? tagList : tagList.slice(0, TAG_COLLAPSED_COUNT)).map(({ tag }) => {
                       const isActive = activeTag === tag;
                       return (
                         <Tag.CheckableTag
                           key={tag}
-                          className={`${chipClass(isActive)} flex items-center gap-1`}
+                          className={`${chipClass(isActive)} flex items-center gap-2`}
                           checked={isActive}
                           onChange={() => handleFilterTag(tag)}
                         >
                           <span>{tag}</span>
-                          <span className={`text-[10px] ${isActive ? 'opacity-70' : 'opacity-40'}`}>{count}</span>
                           <Tooltip title={`同步标签「${tag}」`}>
                             <span
                               role="button"
-                              className={`inline-flex items-center rounded-sm px-0.5 ${isActive ? 'bg-black/10 text-black/80 hover:bg-black/20' : 'bg-ph-border-light/40 text-ph-text-muted hover:bg-ph-orange/30 hover:text-ph-orange'} transition-colors cursor-pointer`}
+                              className={`inline-flex items-center rounded-sm px-1 py-0.5 ml-1 ${isActive ? 'text-black/80 hover:text-black' : 'text-ph-text-muted hover:text-ph-orange'} transition-colors cursor-pointer`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 e.preventDefault();
                                 if (syncing) return;
-                                handleSync({ tags: [tag], pages: 1 });
+                                handleSync({ tags: [tag], pages: 3 });
                               }}
                             >
                               <SyncOutlined style={{ fontSize: 10 }} />
@@ -1085,20 +1084,7 @@ export default function App() {
                     }}
                   />
                 )}
-                {/* 同步热门按钮 */}
-                {tagList.length > 0 && (
-                  <Tooltip title="同步前5个热门标签">
-                    <Button
-                      size="small"
-                      type="default"
-                      icon={<SyncOutlined />}
-                      disabled={syncing}
-                      onClick={() => handleSync({ tags: tagList.slice(0, 5).map((t) => t.tag), pages: 1 })}
-                    >
-                      同步热门
-                    </Button>
-                  </Tooltip>
-                )}
+                
                 {/* 统计信息 chip */}
                 <Tag
                   className="!rounded-md !m-0 !bg-ph-border/40 !border-ph-border !text-ph-text-secondary"
