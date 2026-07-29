@@ -3,16 +3,35 @@
 //
 // Run:  node server.js            (default http://localhost:3000)
 //       set PORT=8080 && node server.js
+// 端口被占用时会自动递增切换，并将实际端口写入 .server-port 供前端读取
 
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const net = require('net');
 const axios = require('axios');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, BASE_URL } = require('./crawler');
 const { decryptBuffer } = require('./imageDecrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hlsUrl');
 
-const PORT = process.env.PORT || 3000;
+const BASE_PORT = parseInt(process.env.PORT, 10) || 3000;
+const PORT_FILE = path.join(__dirname, '.server-port');
+
+function findAvailablePort(startPort) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.on('error', () => {
+      resolve(findAvailablePort(startPort + 1));
+    });
+    server.listen(startPort, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => {
+        resolve(port);
+      });
+    });
+  });
+}
 const OUT_DIR = path.resolve(__dirname, 'output');
 const JSON_PATH = path.join(OUT_DIR, 'index.json');
 const FAV_PATH = path.join(OUT_DIR, 'favorites.json');
@@ -488,28 +507,36 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(BUILD_DIR, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`学习资料 - 服务器已启动: http://localhost:${PORT}`);
-  console.log(`已加载 ${getIndex().length} 条记录，收藏 ${getFavorites().length} 条`);
+(async () => {
+  const port = await findAvailablePort(BASE_PORT);
+  fs.writeFileSync(PORT_FILE, String(port));
 
-  // Startup: per-site 今日 only; if a site has zero today articles, fall back
-  // to its list page 1 (previous day). Does not crawl regular list pages.
-  (async () => {
-    try {
-      console.log('启动爬取：各站点今日（无则回退前一日）...');
-      await crawl({
-        todayOnly: true,
-        replace: true,
-        outDir: OUT_DIR,
-        jsonPath: JSON_PATH,
-        concurrency: 3,
-        onLog: (m) => console.log(m),
-      });
-      indexCache = null;
-      indexMtimeMs = -1;
-      console.log(`启动爬取完成，当前共 ${getIndex().length} 条记录`);
-    } catch (e) {
-      console.warn('启动爬取失败:', e.message);
+  app.listen(port, () => {
+    console.log(`学习资料 - 服务器已启动: http://localhost:${port}`);
+    if (port !== BASE_PORT) {
+      console.log(`端口 ${BASE_PORT} 已被占用，自动切换到 ${port}`);
     }
-  })();
-});
+    console.log(`已加载 ${getIndex().length} 条记录，收藏 ${getFavorites().length} 条`);
+
+    // Startup: per-site 今日 only; if a site has zero today articles, fall back
+    // to its list page 1 (previous day). Does not crawl regular list pages.
+    (async () => {
+      try {
+        console.log('启动爬取：各站点今日（无则回退前一日）...');
+        await crawl({
+          todayOnly: true,
+          replace: true,
+          outDir: OUT_DIR,
+          jsonPath: JSON_PATH,
+          concurrency: 3,
+          onLog: (m) => console.log(m),
+        });
+        indexCache = null;
+        indexMtimeMs = -1;
+        console.log(`启动爬取完成，当前共 ${getIndex().length} 条记录`);
+      } catch (e) {
+        console.warn('启动爬取失败:', e.message);
+      }
+    })();
+  });
+})();

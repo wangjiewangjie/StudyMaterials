@@ -831,11 +831,10 @@ export default function App() {
           <button
             type="button"
             onClick={resetHome}
-            className="flex items-center text-[22px] font-extrabold tracking-[.5px] whitespace-nowrap shrink-0 cursor-pointer bg-transparent border-0 p-0"
+            className="flex items-center gap-2 shrink-0 cursor-pointer bg-transparent border-0 p-0 hover:opacity-90 transition-opacity"
             title="返回全部资料"
           >
-            <span className="text-white px-0.5">学习</span>
-            <span className="text-black bg-ph-orange px-2 py-0.5 rounded ml-[3px]">资料</span>
+            <img src="/logo.svg" alt="学习资料" width="100" height="100" className="block" />
           </button>
           <Input.Search
             ref={searchInputRef}
