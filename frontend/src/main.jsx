@@ -1,12 +1,3 @@
-/*
- * @Author: wangjie
- * @Date: 2026-07-11 21:05:29
- * @LastEditTime: 2026-07-13 21:22:14
- * @LastEditors: wangjie
- * @Description: 
- * @FilePath: \Scrape\frontend\src\main.jsx
- * 
- */
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConfigProvider, theme as antdTheme, App as AntdApp } from 'antd';

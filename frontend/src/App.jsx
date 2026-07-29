@@ -9,6 +9,7 @@ import {
   CalendarOutlined, ClearOutlined, ReloadOutlined,
   StarOutlined, StarFilled, DownloadOutlined, PlayCircleFilled,
   CopyOutlined, VerticalAlignTopOutlined, CloseOutlined, TagsOutlined,
+  ReadOutlined,
 } from '@ant-design/icons';
 import VideoPlayer from './VideoPlayer.jsx';
 
@@ -54,12 +55,19 @@ function SkeletonGrid({ count = 12 }) {
   return (
     <div className="grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="overflow-hidden rounded-md border border-ph-border bg-ph-card rise-in" style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}>
+        <div
+          key={i}
+          className="overflow-hidden rounded-lg border border-ph-border bg-ph-card rise-in"
+          style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+        >
           <div className="skel w-full" style={{ aspectRatio: '16/9' }} />
           <div className="p-2.5 space-y-2">
             <div className="skel h-3.5 w-[92%] rounded-sm" />
             <div className="skel h-3.5 w-[64%] rounded-sm" />
-            <div className="skel h-2.5 w-[40%] rounded-sm mt-1" />
+            <div className="flex gap-2 mt-2">
+              <div className="skel h-3 w-12 rounded-sm" />
+              <div className="skel h-3 w-16 rounded-sm" />
+            </div>
           </div>
         </div>
       ))}
@@ -91,7 +99,7 @@ const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFa
       role="button"
       tabIndex={0}
       aria-label={(item.title || `条目 ${item.id}`) + (hasVideo ? '，可播放' : '，无法播放')}
-      className="group overflow-hidden !bg-ph-card !border-ph-border transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-[3px] hover:!border-ph-orange hover:shadow-[0_8px_24px_rgba(0,0,0,.35)] focus-visible:!border-ph-orange focus-visible:outline-none rise-in"
+      className="group overflow-hidden !bg-ph-card !border-ph-border transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-[4px] hover:!border-ph-orange/70 hover:shadow-[0_10px_28px_rgba(0,0,0,.45),0_0_0_1px_rgba(255,144,0,.15)] focus-visible:!border-ph-orange focus-visible:outline-none rise-in"
       style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
       styles={{ body: { padding: 0 } }}
       onClick={handleClick}
@@ -103,7 +111,7 @@ const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFa
             src={thumb}
             alt=""
             loading="lazy"
-            className="w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105"
+            className="w-full h-full object-cover block transition-transform duration-[400ms] ease-out group-hover:scale-[1.08]"
             onError={() => setImgOk(false)}
           />
         ) : (
@@ -112,8 +120,8 @@ const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFa
           </div>
         )}
 
-        <span className="absolute top-1.5 left-1.5 bg-ph-orange/95 text-black text-[11px] font-bold px-1.5 py-0.5 rounded-sm flex items-center gap-1 shadow-sm">
-          <GlobalOutlined />
+        <span className="absolute top-1.5 left-1.5 bg-black/70 backdrop-blur-sm text-white text-[11px] font-semibold px-1.5 py-0.5 rounded flex items-center gap-1 shadow-sm border border-white/5">
+          <GlobalOutlined className="text-ph-orange" style={{ fontSize: 10 }} />
           {siteLabel(item.siteUrl)}
         </span>
 
@@ -122,7 +130,7 @@ const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFa
           title={favorited ? '取消收藏' : '加入收藏'}
           aria-label={favorited ? '取消收藏' : '加入收藏'}
           onClick={handleFav}
-          className="absolute top-1.5 right-1.5 z-[2] w-8 h-8 rounded-sm bg-black/65 hover:bg-black/90 border-0 cursor-pointer flex items-center justify-center text-base transition-colors"
+          className="absolute top-1.5 right-1.5 z-[2] w-8 h-8 rounded-full bg-black/65 hover:bg-black/90 backdrop-blur-sm border-0 cursor-pointer flex items-center justify-center text-base transition-all hover:scale-110"
         >
           {favorited
             ? <StarFilled style={{ color: '#ff9000' }} />
@@ -131,31 +139,37 @@ const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFa
 
         {hasVideo && (
           <span className="card-play absolute inset-0 z-[1] flex items-center justify-center pointer-events-none">
-            <span className="w-12 h-12 rounded-full bg-black/55 text-ph-orange flex items-center justify-center text-[36px] shadow-lg backdrop-blur-[2px]">
+            <span className="w-14 h-14 rounded-full bg-black/55 text-ph-orange flex items-center justify-center text-[40px] shadow-[0_4px_20px_rgba(0,0,0,.5)] backdrop-blur-[3px] border border-ph-orange/30">
               <PlayCircleFilled />
             </span>
           </span>
         )}
 
+        <span className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
+
         {hasVideo ? (
-          <span className="absolute bottom-1.5 right-1.5 bg-black/80 text-white text-[12px] font-bold px-1.5 py-0.5 rounded-sm">
-            <VideoCameraOutlined />
+          <span className="absolute bottom-1.5 right-1.5 bg-black/80 text-ph-orange text-[12px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
+            <VideoCameraOutlined style={{ fontSize: 11 }} />
           </span>
         ) : (
-          <span className="absolute bottom-1.5 right-1.5 bg-zinc-800/90 text-zinc-400 text-[11px] font-semibold px-1.5 py-0.5 rounded-sm">
+          <span className="absolute bottom-1.5 right-1.5 bg-zinc-800/90 text-zinc-400 text-[11px] font-semibold px-1.5 py-0.5 rounded">
             无法播放
           </span>
         )}
       </div>
       <div className="p-2.5">
-        <div className="line-clamp-2 text-[13px] leading-[1.45] text-ph-text-primary font-semibold min-h-[38px]">
+        <div className="line-clamp-2 text-[13px] leading-[1.5] text-ph-text-primary font-semibold min-h-[39px] group-hover:text-ph-orange/95 transition-colors">
           {item.title || `条目 ${item.id}`}
         </div>
         <div className="flex gap-2 items-center text-[11px] text-ph-text-muted mt-1.5 flex-wrap">
-          {item.category && <span className="text-ph-orange font-semibold">{item.category}</span>}
+          {item.category && (
+            <span className="text-ph-orange font-semibold bg-ph-orange/10 px-1.5 py-0.5 rounded">
+              {item.category}
+            </span>
+          )}
           {item.datePublished && (
             <span className="inline-flex items-center gap-0.5">
-              <CalendarOutlined />
+              <CalendarOutlined style={{ fontSize: 10 }} />
               {formatDate(item.datePublished)}
             </span>
           )}
@@ -205,14 +219,17 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
       centered
       title={
         <div className="flex items-start gap-3 pr-2">
-          <span className="flex-1 min-w-0 line-clamp-2">{item.title || `条目 ${item.id}`}</span>
+          <span className="flex-1 min-w-0 line-clamp-2 text-[15px] font-semibold leading-[1.4]">
+            {item.title || `条目 ${item.id}`}
+          </span>
           <Tooltip title={favorited ? '取消收藏' : '加入收藏'}>
             <Button
               type="text"
               size="small"
-              className="!shrink-0"
+              className="!shrink-0 !w-8 !h-8 !rounded-full hover:!bg-ph-orange/15"
               icon={favorited ? <StarFilled style={{ color: '#ff9000' }} /> : <StarOutlined />}
               onClick={() => onToggleFavorite && onToggleFavorite(item)}
+              aria-label={favorited ? '取消收藏' : '加入收藏'}
             />
           </Tooltip>
         </div>
@@ -222,9 +239,11 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
       {hasVideo ? (
         <VideoPlayer item={item} onTags={handleTags} />
       ) : (
-        <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-6">
-          <InboxOutlined style={{ fontSize: 48, color: '#555' }} />
-          <Text className="!text-ph-text-primary text-base">暂时无法播放</Text>
+        <div className="flex flex-col items-center justify-center gap-3 py-20 text-center px-6 bg-gradient-to-b from-ph-card to-ph-bg">
+          <span className="flex items-center justify-center w-16 h-16 rounded-full bg-ph-orange/10 border border-ph-orange/20 text-ph-orange">
+            <InboxOutlined style={{ fontSize: 30 }} />
+          </span>
+          <Text className="!text-ph-text-primary text-base font-semibold">暂时无法播放</Text>
           <Text type="secondary" className="text-xs max-w-sm">
             来源「{siteLabel(item.siteUrl)}」可能未提供可用地址，可打开原文查看。
           </Text>
@@ -234,14 +253,14 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
         {(datePublished || item.siteUrl) && (
           <div className="flex gap-4 items-center text-[12px] text-ph-text-muted mb-2.5 flex-wrap">
             {datePublished && (
-              <span className="inline-flex items-center gap-1">
-                <CalendarOutlined />
+              <span className="inline-flex items-center gap-1 bg-ph-bg/60 border border-ph-border px-2 py-0.5 rounded">
+                <CalendarOutlined className="text-ph-orange" style={{ fontSize: 11 }} />
                 {formatDate(datePublished)}
               </span>
             )}
             {item.siteUrl && (
-              <span className="inline-flex items-center gap-1">
-                <GlobalOutlined />
+              <span className="inline-flex items-center gap-1 bg-ph-bg/60 border border-ph-border px-2 py-0.5 rounded">
+                <GlobalOutlined className="text-ph-orange" style={{ fontSize: 11 }} />
                 {siteLabel(item.siteUrl)}
               </span>
             )}
@@ -249,18 +268,21 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
         )}
         {(category || tags.length > 0) && (
           <div className="mb-1">
-            <Text type="secondary" className="text-[11px] block mb-1.5">点击标签可搜索相关内容</Text>
+            <Text type="secondary" className="text-[11px] block mb-1.5 inline-flex items-center gap-1">
+              <TagsOutlined style={{ fontSize: 10 }} />
+              点击标签可搜索相关内容
+            </Text>
             <Space size={[6, 6]} wrap>
               {category && (
                 <Tooltip title={`搜索「${category}」`}>
-                  <Tag color="orange" className="cursor-pointer !m-0" onClick={() => onTagClick && onTagClick(category)}>
+                  <Tag color="orange" className="cursor-pointer !m-0 !rounded" onClick={() => onTagClick && onTagClick(category)}>
                     {category}
                   </Tag>
                 </Tooltip>
               )}
               {tags.map((t) => (
                 <Tooltip key={t} title={`搜索「${t}」`}>
-                  <Tag className="cursor-pointer !m-0" onClick={() => onTagClick && onTagClick(t)}>
+                  <Tag className="cursor-pointer !m-0 !rounded hover:!border-ph-orange/60 hover:!text-ph-orange transition-colors" onClick={() => onTagClick && onTagClick(t)}>
                     {t}
                   </Tag>
                 </Tooltip>
@@ -268,7 +290,7 @@ function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite })
             </Space>
           </div>
         )}
-        <div className="flex gap-2 flex-wrap mt-3">
+        <div className="flex gap-2 flex-wrap mt-3 pt-3 border-t border-ph-border/60">
           {item.url && (
             <Button size="small" icon={<LinkOutlined />} href={item.url} target="_blank" rel="noreferrer">
               打开原文
@@ -474,10 +496,10 @@ function FilterStrip({ children }) {
 }
 
 function chipClass(active) {
-  return `!rounded-lg !px-2.5 !py-[5px] !text-[12px] !border !leading-none transition-all ${
+  return `!rounded !px-2.5 !py-[5px] !text-[12px] !border !leading-none transition-all duration-150 ${
     active
-      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold shadow-sm'
-      : '!bg-ph-border/60 !text-ph-text-secondary !border-ph-border hover:!border-ph-orange/60 hover:!bg-ph-border'
+      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold shadow-[0_2px_8px_rgba(255,144,0,.25)]'
+      : '!bg-ph-card !text-ph-text-secondary !border-ph-border hover:!border-ph-orange/60 hover:!text-ph-text-primary hover:!bg-ph-elevated'
   }`;
 }
 
@@ -883,12 +905,15 @@ export default function App() {
           <button
             type="button"
             onClick={resetHome}
-            className="flex items-center gap-2 shrink-0 cursor-pointer bg-transparent border-0 p-0 hover:opacity-90 transition-opacity"
+            className="flex items-center gap-2 shrink-0 cursor-pointer bg-transparent border-0 p-0 hover:opacity-90 transition-opacity group/brand"
             title="返回全部资料"
           >
+            <span className="flex items-center justify-center w-8 h-8 rounded-md bg-ph-orange/15 border border-ph-orange/30 text-ph-orange transition-all group-hover/brand:bg-ph-orange/25 group-hover/brand:border-ph-orange/50">
+              <ReadOutlined style={{ fontSize: 17 }} />
+            </span>
             <span className="flex items-center gap-1.5">
-              <span className="text-ph-text-secondary font-bold text-lg whitespace-nowrap">学习</span>
-              <span className="bg-ph-orange text-black font-bold text-sm px-2 py-0.5 rounded-sm whitespace-nowrap">资料</span>
+              <span className="text-ph-text-primary font-bold text-lg whitespace-nowrap tracking-tight">学习</span>
+              <span className="bg-ph-orange text-black font-bold text-sm px-2 py-0.5 rounded whitespace-nowrap shadow-[0_2px_8px_rgba(255,144,0,.35)]">资料</span>
             </span>
           </button>
           <Input.Search
@@ -945,19 +970,21 @@ export default function App() {
           />
           {status && !syncing && (
             <span
-              className="hidden xl:inline-block text-xs text-ph-text-secondary bg-ph-bg border border-ph-border px-3 py-1 rounded-full max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap shrink-0"
+              className="hidden xl:inline-flex items-center text-xs text-ph-text-secondary bg-ph-bg/80 border border-ph-border px-3 py-1 rounded-full max-w-[220px] overflow-hidden shrink-0"
               title={status}
             >
-              {status}
+              <span className="w-1.5 h-1.5 rounded-full bg-ph-orange mr-2 shrink-0" />
+              <span className="truncate">{status}</span>
             </span>
           )}
         </Header>
 
         {syncing && (
-          <div className="sync-banner flex items-center gap-2 px-[22px] py-1.5 text-[12px] text-ph-orange bg-[#1a1408] border-b border-ph-orange/25">
-            <SyncOutlined spin className="sync-pulse" />
+          <div className="sync-banner relative flex items-center gap-2 px-[22px] py-1.5 text-[12px] text-ph-orange bg-[#1a1408] border-b border-ph-orange/25 overflow-hidden">
+            <SyncOutlined spin className="sync-pulse shrink-0" />
             <span className="font-semibold shrink-0">{status || '正在同步…'}</span>
             <span className="text-ph-text-muted truncate flex-1 min-w-0">可继续浏览 · 悬停「同步中」查看日志 · 请勿刷新</span>
+            <span className="absolute bottom-0 left-0 h-[2px] bg-ph-orange/60 sync-progress-bar" />
           </div>
         )}
 
@@ -966,13 +993,16 @@ export default function App() {
           <div className="bg-ph-bg/95 border-b border-ph-border">
             {/* 已选筛选 chip 快速清除 */}
             {(activeTag || activeSite || (showFavorites && lastQuery)) && (
-              <div className="flex items-center gap-2 px-[22px] pt-2 pb-1 text-[12px] flex-wrap">
-                <span className="text-ph-text-muted shrink-0">已选：</span>
+              <div className="flex items-center gap-2 px-[22px] pt-2 pb-1.5 text-[12px] flex-wrap">
+                <span className="text-ph-text-muted shrink-0 inline-flex items-center gap-1">
+                  <TagsOutlined style={{ fontSize: 11 }} />
+                  已选
+                </span>
                 {activeTag && (
                   <Tag
                     closable
                     onClose={(e) => { e.preventDefault(); handleFilterTag(activeTag); }}
-                    className="!bg-ph-orange/15 !text-ph-orange !border-ph-orange/40 !rounded-md !m-0"
+                    className="!bg-ph-orange/15 !text-ph-orange !border-ph-orange/40 !rounded !m-0 !py-0.5"
                     icon={<TagsOutlined style={{ fontSize: 10 }} />}
                   >
                     {activeTag}
@@ -982,7 +1012,7 @@ export default function App() {
                   <Tag
                     closable
                     onClose={(e) => { e.preventDefault(); handleFilterSite(activeSite); }}
-                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded-md !m-0"
+                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded !m-0 !py-0.5"
                     icon={<GlobalOutlined style={{ fontSize: 10 }} />}
                   >
                     {siteLabel(activeSite === '__unknown__' ? null : activeSite)}
@@ -992,7 +1022,7 @@ export default function App() {
                   <Tag
                     closable
                     onClose={(e) => { e.preventDefault(); setLastQuery(''); }}
-                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded-md !m-0"
+                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded !m-0 !py-0.5"
                   >
                     搜索「{lastQuery}」
                   </Tag>
@@ -1001,7 +1031,7 @@ export default function App() {
                   type="link"
                   size="small"
                   icon={<ClearOutlined />}
-                  className="!px-1 !text-[11px] !h-auto !min-h-0 !py-0"
+                  className="!px-1.5 !text-[11px] !h-auto !min-h-0 !py-0 !text-ph-text-muted hover:!text-ph-orange"
                   onClick={clearFilters}
                 >
                   全部清除
@@ -1087,7 +1117,7 @@ export default function App() {
                 
                 {/* 统计信息 chip */}
                 <Tag
-                  className="!rounded-md !m-0 !bg-ph-border/40 !border-ph-border !text-ph-text-secondary"
+                  className="!rounded !m-0 !bg-ph-bg/60 !border-ph-border !text-ph-text-secondary !px-2 inline-flex items-center"
                 >
                   {showFavorites
                     ? `收藏 ${filtered.length}${favorites.length > filtered.length ? `/${favorites.length}` : ''}`
@@ -1122,12 +1152,16 @@ export default function App() {
           <Spin spinning={loadingList && items.length > 0} tip="正在加载…">
             {filtered.length === 0 ? (
               <Empty
-                image={<InboxOutlined style={{ fontSize: 64, color: '#555' }} />}
-                description={<Text type="secondary">{emptyDescription}</Text>}
+                image={(
+                  <span className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-ph-orange/8 border border-ph-orange/15 text-ph-orange/70 rise-in">
+                    <InboxOutlined style={{ fontSize: 40 }} />
+                  </span>
+                )}
+                description={<Text type="secondary" className="!text-ph-text-muted">{emptyDescription}</Text>}
                 className="!py-20 rise-in"
               >
                 {hasFilter && (
-                  <Button type="primary" onClick={clearFilters}>清除筛选</Button>
+                  <Button type="primary" icon={<ClearOutlined />} onClick={clearFilters}>清除筛选</Button>
                 )}
                 {!hasFilter && (
                   <Space>
@@ -1153,7 +1187,7 @@ export default function App() {
                   ))}
                 </div>
                 {filtered.length > PAGE_SIZE && (
-                  <div className="flex justify-center items-center gap-3 mt-6">
+                  <div className="flex justify-center items-center gap-3 mt-8 pt-6 border-t border-ph-border/40">
                     <Pagination
                       current={safePage}
                       pageSize={PAGE_SIZE}

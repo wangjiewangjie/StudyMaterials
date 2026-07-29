@@ -1,12 +1,3 @@
-/*
- * @Author: wangjie
- * @Date: 2026-07-13 23:00:16
- * @LastEditTime: 2026-07-13 23:01:23
- * @LastEditors: wangjie
- * @Description: 
- * @FilePath: \Scrape\frontend\tailwind.config.js
- * @
- */
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,jsx,ts,tsx}'],

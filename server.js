@@ -11,8 +11,8 @@ const fs = require('fs');
 const net = require('net');
 const axios = require('axios');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, BASE_URL, UA } = require('./crawler');
-const { decryptBuffer } = require('./imageDecrypt');
-const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hlsUrl');
+const { decryptBuffer } = require('./image-decrypt');
+const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 3000;
 const PORT_FILE = path.join(__dirname, '.server-port');
@@ -135,10 +135,14 @@ function toVideoItem(a) {
 
 /** Look up by id: index first (freshest crawl), then favorites (survives crawl wipe). */
 function findById(id) {
-  const fromIndex = getIndex().find((a) => a.id === id);
-  if (fromIndex) return { item: fromIndex, source: 'index' };
-  const fromFav = getFavorites().find((a) => a.id === id);
-  if (fromFav) return { item: fromFav, source: 'favorites' };
+  const index = getIndex();
+  for (let i = 0; i < index.length; i++) {
+    if (index[i].id === id) return { item: index[i], source: 'index' };
+  }
+  const favs = getFavorites();
+  for (let i = 0; i < favs.length; i++) {
+    if (favs[i].id === id) return { item: favs[i], source: 'favorites' };
+  }
   return null;
 }
 
@@ -426,8 +430,8 @@ app.post('/api/favorites', (req, res) => {
   const body = req.body || {};
   if (!body.id) return res.status(400).json({ error: 'item id required' });
 
-  const fromIndex = getIndex().find((a) => a.id === body.id);
-  const snapshot = toVideoItem(fromIndex || body);
+  const found = findById(body.id);
+  const snapshot = toVideoItem(found ? found.item : body);
   if (!snapshot.id) return res.status(400).json({ error: 'item id required' });
 
   const favs = getFavorites();

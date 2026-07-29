@@ -16,6 +16,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const https = require('https');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
@@ -31,19 +33,31 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 // Articles whose title or tags contain any of these keywords are excluded from
 // the index (case-insensitive substring match).
 const EXCLUDE_KEYWORDS = ['重口味', 'ai'];
+const EXCLUDE_KW_LOWER = EXCLUDE_KEYWORDS.map((kw) => kw.toLowerCase());
 
 function matchesExclude(article) {
   const title = (article.title || '').toLowerCase();
-  const tags = (article.tags || []).map((t) => String(t).toLowerCase());
-  return EXCLUDE_KEYWORDS.some((kw) => {
-    const k = kw.toLowerCase();
-    return title.includes(k) || tags.some((t) => t.includes(k));
-  });
+  if (EXCLUDE_KW_LOWER.some((k) => title.includes(k))) return true;
+  const tags = article.tags || [];
+  for (let i = 0; i < tags.length; i++) {
+    const t = String(tags[i]).toLowerCase();
+    for (let j = 0; j < EXCLUDE_KW_LOWER.length; j++) {
+      if (t.includes(EXCLUDE_KW_LOWER[j])) return true;
+    }
+  }
+  return false;
 }
 
-const http = axios.create({
+// Keep-alive agents: reuse TCP connections across requests to the same host.
+// Big win for crawl latency (no TLS handshake per request).
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
+
+const client = axios.create({
   timeout: 30000,
   maxRedirects: 5,
+  httpAgent,
+  httpsAgent,
   headers: {
     'User-Agent': UA,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -60,8 +74,7 @@ function sleep(ms) {
 // Extract article ID from any archive URL (site-agnostic).
 function normalizeArchiveUrl(href) {
   const m = href.match(/\/archives\/(\d+)\//);
-  if (!m) return null;
-  return { id: m[1] };
+  return m ? { id: m[1] } : null;
 }
 
 function archiveUrl(site, id) {
@@ -69,8 +82,7 @@ function archiveUrl(site, id) {
 }
 
 function listPageUrl(site, pageNum) {
-  if (pageNum <= 1) return site + '/';
-  return `${site}/page/${pageNum}/`;
+  return pageNum <= 1 ? site + '/' : `${site}/page/${pageNum}/`;
 }
 
 // Per-site "今日" (today) entry path — the day's freshest content, used as the
@@ -86,8 +98,7 @@ const SITE_TODAY_PATH = {
 function todayPageUrl(site, pageNum) {
   const p = SITE_TODAY_PATH[site];
   if (!p) return null;
-  if (pageNum <= 1) return site + p;
-  return site + p.replace(/\/$/, '') + `/page/${pageNum}/`;
+  return pageNum <= 1 ? site + p : site + p.replace(/\/$/, '') + `/page/${pageNum}/`;
 }
 
 // China (UTC+8) calendar date as YYYY-MM-DD.
@@ -102,9 +113,7 @@ function chinaDateStr(offsetDays = 0) {
 function articleDateStr(iso) {
   if (!iso) return null;
   const t = Date.parse(iso);
-  if (!isNaN(t)) {
-    return new Date(t + 8 * 3600000).toISOString().slice(0, 10);
-  }
+  if (!isNaN(t)) return new Date(t + 8 * 3600000).toISOString().slice(0, 10);
   const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : null;
 }
@@ -116,8 +125,7 @@ function articleContentDateStr(article) {
 
 function searchUrl(site, keyword, pageNum) {
   const enc = encodeURIComponent(keyword);
-  if (pageNum <= 1) return `${site}/search/${enc}/`;
-  return `${site}/search/${enc}/page/${pageNum}/`;
+  return pageNum <= 1 ? `${site}/search/${enc}/` : `${site}/search/${enc}/page/${pageNum}/`;
 }
 
 // Per-request Referer matching the target site.
@@ -125,15 +133,16 @@ function headersFor(site) {
   return { Referer: site + '/', Origin: site };
 }
 
-async function getWithRetry(url, client = http, retries = 4, extraHeaders = {}) {
+async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders = {}) {
   let lastErr;
   for (let i = 0; i < retries; i++) {
     try {
-      return await client.get(url, { headers: extraHeaders });
+      return await httpClient.get(url, { headers: extraHeaders });
     } catch (err) {
       lastErr = err;
       const code = err.response && err.response.status;
-      if (code === 404) throw err;
+      // 4xx (except 429) are not retryable.
+      if (code && code >= 400 && code < 500 && code !== 429) throw err;
       await sleep(800 * Math.pow(2, i) + Math.floor(Math.random() * 300));
     }
   }
@@ -153,51 +162,54 @@ function parsePagesArg(arg) {
 
 // ---------- list / search page parsing (polyglot: post-card + xqbj themes) ----------
 
+const COVER_BANNER_RE = /loadBannerDirect\s*\(\s*['"]([^'"]+)['"]/;
+const COVER_ATTR_RE = /https?:\/\/[^\s`"']+/;
+
 function parseListPage(html, siteUrl) {
   const $ = cheerio.load(html);
   const articles = [];
   const seen = new Set();
 
+  const pushArticle = (a) => {
+    if (seen.has(a.id)) return;
+    seen.add(a.id);
+    articles.push(a);
+  };
+
   // Theme 1: post-card (bite, d1ve, assert) — article > a[href*="/archives/"] > .post-card
   $('article a[href*="/archives/"]').each((_, a) => {
     const $a = $(a);
-    const href = $a.attr('href') || '';
-    const norm = normalizeArchiveUrl(href);
-    if (!norm || seen.has(norm.id)) return;
+    const norm = normalizeArchiveUrl($a.attr('href') || '');
+    if (!norm) return;
 
     let coverUrl = null;
     const $card = $a.find('.post-card').first();
-    const cardHtml = $card.html() || '';
-    const coverMatch = cardHtml.match(/loadBannerDirect\s*\(\s*['"]([^'"]+)['"]/);
-    if (coverMatch) coverUrl = coverMatch[1];
+    if ($card.length) {
+      const m = ($card.html() || '').match(COVER_BANNER_RE);
+      if (m) coverUrl = m[0];
+    }
 
     const title = $a.find('.post-card-title').text().replace(/\s+/g, ' ').trim();
-
-    seen.add(norm.id);
-    articles.push({ id: norm.id, url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
+    pushArticle({ id: norm.id, url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
   });
 
   // Theme 2: xqbj-list-rows (breast/51fans) — .xqbj-list-rows a[href*="/archives/"]
   $('.xqbj-list-rows a[href*="/archives/"]').each((_, a) => {
     const $a = $(a);
-    const href = $a.attr('href') || '';
-    const norm = normalizeArchiveUrl(href);
-    if (!norm || seen.has(norm.id)) return;
+    const norm = normalizeArchiveUrl($a.attr('href') || '');
+    if (!norm) return;
 
     const title = ($a.attr('title') || $a.find('.xqbj-list-rows-image-title').text() || '')
       .replace(/\s+/g, ' ').trim();
 
-    // Cover: z-image-loader-url attribute (may be wrapped in backticks from Vue template)
     let coverUrl = null;
     const $img = $a.find('img[z-image-loader-url]').first();
     if ($img.length) {
-      const raw = $img.attr('z-image-loader-url') || '';
-      const m = raw.match(/https?:\/\/[^\s`"']+/);
+      const m = ($img.attr('z-image-loader-url') || '').match(COVER_ATTR_RE);
       if (m) coverUrl = m[0];
     }
 
-    seen.add(norm.id);
-    articles.push({ id: norm.id, url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
+    pushArticle({ id: norm.id, url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
   });
 
   return articles;
@@ -205,9 +217,15 @@ function parseListPage(html, siteUrl) {
 
 // ---------- detail page parsing (polyglot) ----------
 
+const JSON_LD_PUB_RE = /"datePublished"\s*:\s*"([^"]+)"/;
+const JSON_LD_MOD_RE = /"dateModified"\s*:\s*"([^"]+)"/;
+
 function parseDetailPage(html) {
   const $ = cheerio.load(html);
-  const result = { title: null, video: null, tags: [], category: null, coverUrl: null, datePublished: null, dateModified: null };
+  const result = {
+    title: null, video: null, tags: [], category: null,
+    coverUrl: null, datePublished: null, dateModified: null,
+  };
 
   // Title — try multiple selectors used by different themes
   const h1 = $('h1.post-title, h1[itemprop="headline"], .article-title h1, article h1').first();
@@ -218,8 +236,8 @@ function parseDetailPage(html) {
   if (metaImg && !/\.gif/i.test(metaImg)) result.coverUrl = metaImg;
 
   // Publish / modified dates — two strategies across themes:
-  //   (a) post-card theme (bite, d1ve, assert): <meta itemprop="datePublished" content="...">
-  //   (b) xqbj theme (breast/51fans): JSON-LD <script type="application/ld+json"> with datePublished
+  //   (a) post-card theme: <meta itemprop="datePublished" content="...">
+  //   (b) xqbj theme: JSON-LD with datePublished
   const metaPublished = $('meta[itemprop="datePublished"]').attr('content');
   if (metaPublished) result.datePublished = metaPublished;
   const metaModified = $('meta[itemprop="dateModified"]').attr('content');
@@ -231,24 +249,24 @@ function parseDetailPage(html) {
       const raw = $(el).html() || '';
       // Use a tolerant regex rather than JSON.parse; the JSON-LD may be embedded
       // inside a Vue template / wrapped in backticks which breaks strict parsing.
-      const mPub = raw.match(/"datePublished"\s*:\s*"([^"]+)"/);
+      const mPub = raw.match(JSON_LD_PUB_RE);
       if (mPub) result.datePublished = mPub[1];
-      const mMod = raw.match(/"dateModified"\s*:\s*"([^"]+)"/);
+      const mMod = raw.match(JSON_LD_MOD_RE);
       if (mMod) result.dateModified = mMod[1];
     });
   }
 
-  // Tags — try DOM links first (post-card theme), then data attribute (xqbj/d1ve theme)
+  // Tags — DOM links (post-card theme)
+  const tagSet = new Set();
   $('div.keywords a, div.tags div.keywords a').each((_, a) => {
     const t = $(a).text().trim();
-    if (t && !result.tags.includes(t)) result.tags.push(t);
+    if (t) tagSet.add(t);
   });
 
-  // Category — try breadcrumb first, then data attribute
-  const $crumb = $('p.sp_breadcrumb_nav');
-  const crumbLinks = $crumb.find('a');
-  if (crumbLinks.length >= 2) {
-    result.category = crumbLinks.eq(1).text().trim();
+  // Category — breadcrumb first
+  const $crumb = $('p.sp_breadcrumb_nav a');
+  if ($crumb.length >= 2) {
+    result.category = $crumb.eq(1).text().trim();
   }
 
   // Video + tags + category from .dplayer[data-config]
@@ -258,12 +276,12 @@ function parseDetailPage(html) {
     if (!cfg) return;
 
     // Tags from data-video_tag_name (comma-separated) if DOM parsing found nothing
-    if (result.tags.length === 0) {
+    if (tagSet.size === 0) {
       const tagStr = $div.attr('data-video_tag_name');
       if (tagStr) {
         tagStr.split(',').forEach((t) => {
           t = t.trim();
-          if (t && !result.tags.includes(t)) result.tags.push(t);
+          if (t) tagSet.add(t);
         });
       }
     }
@@ -277,15 +295,16 @@ function parseDetailPage(html) {
     // Video URL — two data-config shapes:
     //   (a) obj.video.url = direct m3u8 (bite, breast)
     //   (b) obj.url = player endpoint or direct url (d1ve)
+    if (result.video) return;
     try {
       const obj = JSON.parse(cfg);
-      if (obj.video && obj.video.url && !result.video) {
+      if (obj.video && obj.video.url) {
         result.video = {
           url: obj.video.url,
           type: obj.video.type || 'hls',
           thumbnails: obj.video.thumbnails || null,
         };
-      } else if (obj.url && !result.video) {
+      } else if (obj.url) {
         result.video = {
           url: obj.url,
           type: obj.type || 'hls',
@@ -298,6 +317,7 @@ function parseDetailPage(html) {
     }
   });
 
+  result.tags = Array.from(tagSet);
   return result;
 }
 
@@ -305,7 +325,7 @@ function parseDetailPage(html) {
 async function resolvePlayerUrl(siteUrl, playerPath, log) {
   const fullUrl = playerPath.startsWith('http') ? playerPath : siteUrl + playerPath;
   try {
-    const res = await getWithRetry(fullUrl, http, 2, headersFor(siteUrl));
+    const res = await getWithRetry(fullUrl, client, 2, headersFor(siteUrl));
     const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
     const url = data && data.data && data.data[0] && data.data[0].url;
     if (url) return url;
@@ -317,14 +337,14 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
   }
 }
 
-// ---------- concurrency runner ----------
+// ---------- concurrency runner (p-limit style: simple, no reject on first error) ----------
 
 async function mapWithConcurrency(items, limit, mapper) {
   if (!items.length) return [];
   const results = new Array(items.length);
   let cursor = 0;
   let active = 0;
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const launch = () => {
       while (active < limit && cursor < items.length) {
         const idx = cursor++;
@@ -337,7 +357,13 @@ async function mapWithConcurrency(items, limit, mapper) {
             if (cursor >= items.length && active === 0) resolve(results);
             else launch();
           })
-          .catch(reject);
+          .catch((err) => {
+            // Map error to a sentinel; caller decides how to handle.
+            results[idx] = { __error: err };
+            active--;
+            if (cursor >= items.length && active === 0) resolve(results);
+            else launch();
+          });
       }
     };
     launch();
@@ -362,47 +388,56 @@ function saveIndex(jsonPath, articles) {
 // Merge crawled articles into existing index: new/updated items are pushed
 // to the front; older entries without a match are kept. Dedupes by id.
 function mergeIntoIndex(existing, incoming) {
+  const existingMap = new Map(existing.map((a) => [a.id, a]));
   const incomingIds = new Set(incoming.map((a) => a.id));
   const merged = [...incoming];
+  let added = 0;
   for (const a of existing) {
     if (!incomingIds.has(a.id)) merged.push(a);
   }
-  const added = incoming.filter((a) => !existing.some((e) => e.id === a.id)).length;
+  for (const a of incoming) {
+    if (!existingMap.has(a.id)) added++;
+  }
   return { merged, added, updated: incoming.length - added };
 }
 
 // ---------- multi-site aggregated fetch ----------
 
-// Fetch a list/search page from ALL sites in parallel, aggregate articles by ID.
-async function fetchListPageFromAllSites(pageNum, log, mode) {
-  // mode: 'list' | 'search'
-  const keyword = mode.keyword;
-  const results = await Promise.allSettled(
-    SITES.map(async (site) => {
-      const url = mode.type === 'search' ? searchUrl(site, keyword, pageNum) : listPageUrl(site, pageNum);
-      log(`[${mode.type}] ${site} page ${pageNum}`);
-      const res = await getWithRetry(url, http, 3, headersFor(site));
-      return { site, articles: parseListPage(res.data, site) };
-    })
-  );
-
+// Aggregate results from a Promise.allSettled into a deduped article list.
+function aggregateSettled(results, sites, log) {
   const aggregated = [];
   const seenIds = new Set();
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.status === 'fulfilled') {
-      log(`  [${SITES[i]}] -> ${r.value.articles.length} articles`);
-      for (const a of r.value.articles) {
-        if (!seenIds.has(a.id)) {
-          seenIds.add(a.id);
-          aggregated.push(a);
+      if (Array.isArray(r.value)) {
+        for (const a of r.value) {
+          if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
+        }
+      } else if (r.value && r.value.articles) {
+        log(`  [${sites[i]}] -> ${r.value.articles.length} articles`);
+        for (const a of r.value.articles) {
+          if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
         }
       }
     } else {
-      log(`  [${SITES[i]}] FAILED: ${r.reason.message}`);
+      log(`  [${sites[i]}] FAILED: ${r.reason && r.reason.message}`);
     }
   }
   return aggregated;
+}
+
+// Fetch a list/search page from ALL sites in parallel, aggregate articles by ID.
+async function fetchListPageFromAllSites(pageNum, log, mode) {
+  const results = await Promise.allSettled(
+    SITES.map(async (site) => {
+      const url = mode.type === 'search' ? searchUrl(site, mode.keyword, pageNum) : listPageUrl(site, pageNum);
+      log(`[${mode.type}] ${site} page ${pageNum}`);
+      const res = await getWithRetry(url, client, 3, headersFor(site));
+      return { site, articles: parseListPage(res.data, site) };
+    })
+  );
+  return aggregateSettled(results, SITES, log);
 }
 
 // Fetch "今日" per site. Each site is handled independently: if its today
@@ -412,9 +447,7 @@ async function fetchTodayPerSiteWithFallback(log) {
     SITES.map(async (site) => {
       const articles = [];
       const seen = new Set();
-      const add = (a) => {
-        if (!seen.has(a.id)) { seen.add(a.id); articles.push(a); }
-      };
+      const add = (a) => { if (!seen.has(a.id)) { seen.add(a.id); articles.push(a); } };
 
       let source = 'today';
       const todayPath = SITE_TODAY_PATH[site];
@@ -425,7 +458,7 @@ async function fetchTodayPerSiteWithFallback(log) {
           if (!url) break;
           try {
             log(`[today] ${site} page ${pg}`);
-            const res = await getWithRetry(url, http, 2, headersFor(site));
+            const res = await getWithRetry(url, client, 2, headersFor(site));
             parseListPage(res.data, site).forEach(add);
           } catch (err) {
             if (pg === 1) log(`  [today ${site}] FAILED: ${err.message}`);
@@ -438,7 +471,7 @@ async function fetchTodayPerSiteWithFallback(log) {
         source = 'fallback';
         log(`[today] ${site} -> 0 条，回退列表第 1 页（前一日）`);
         try {
-          const res = await getWithRetry(listPageUrl(site, 1), http, 3, headersFor(site));
+          const res = await getWithRetry(listPageUrl(site, 1), client, 3, headersFor(site));
           parseListPage(res.data, site).forEach(add);
           log(`  [fallback ${site}] -> ${articles.length} articles`);
         } catch (err) {
@@ -452,20 +485,7 @@ async function fetchTodayPerSiteWithFallback(log) {
       return articles;
     })
   );
-
-  const aggregated = [];
-  const seenIds = new Set();
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    if (r.status === 'fulfilled') {
-      for (const a of r.value) {
-        if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
-      }
-    } else {
-      log(`  [today ${SITES[i]}] FAILED: ${r.reason.message}`);
-    }
-  }
-  return aggregated;
+  return aggregateSettled(results, SITES, log);
 }
 
 // Fetch list pages per site until each site has contributed at least minArticles.
@@ -488,7 +508,7 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
         if (siteIds[site].size >= minArticles) return { site, met: true };
         log(`[minPerSite] ${site} page ${pageNum}`);
         try {
-          const res = await getWithRetry(listPageUrl(site, pageNum), http, 3, headersFor(site));
+          const res = await getWithRetry(listPageUrl(site, pageNum), client, 3, headersFor(site));
           const arts = parseListPage(res.data, site);
           let newCount = 0;
           for (const a of arts) {
@@ -591,7 +611,7 @@ function filterArticlesByModifiedDate(articles, log) {
 //   replace              replace index.json entirely (default: true when todayOnly or minPerSite)
 //   limit                max articles (default 0 = all)
 //   outDir               output directory
-//   concurrency         detail workers (default 3)
+//   concurrency         detail workers (default 6)
 //   jsonPath             index.json path
 //   onLog                progress callback (msg) => void
 async function crawl(opts = {}) {
@@ -677,7 +697,7 @@ async function crawl(opts = {}) {
   log('--- Fetching detail pages ---');
   await mapWithConcurrency(newArticles, concurrency, async (a) => {
     try {
-      const res = await getWithRetry(a.url, http, 3, headersFor(a.siteUrl));
+      const res = await getWithRetry(a.url, client, 3, headersFor(a.siteUrl));
       const detail = parseDetailPage(res.data);
       if (detail.title && !a.title) a.title = detail.title;
       a.video = detail.video;
@@ -774,7 +794,7 @@ async function main() {
     replace: !!args.replace || !!args['today-only'],
     limit: parseInt(args.limit, 10) || 0,
     outDir: args.out || './output',
-    concurrency: parseInt(args.concurrency, 10) || 3,
+    concurrency: parseInt(args.concurrency, 10) || 6,
     jsonPath: args['save-json'] || './output/index.json',
   });
 }

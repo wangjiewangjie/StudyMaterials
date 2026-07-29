@@ -1,4 +1,4 @@
-// imageDecrypt.js
+// image-decrypt.js
 // Decrypts cover images from the source website.
 // The website serves AES-encrypted images that are decrypted client-side
 // via the decryptImage() function in zzz.js. This module loads that

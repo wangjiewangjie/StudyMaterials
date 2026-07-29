@@ -22,10 +22,17 @@ Node.js 爬虫 + 本地视频库 Web UI —— 爬取 4 个站点的文章元数
 ## 项目结构
 
 ```
-Scrape/
+StudyMaterials/
 ├── server.js              # Express 服务器：API + CORS 代理 + 静态资源
 ├── crawler.js             # 爬虫主模块（crawl / parseDetailPage / loadIndex）
-├── imageDecrypt.js        # 源站 AES 加密封面解密（VM 沙箱加载 zzz.js）
+├── image-decrypt.js       # 源站 AES 加密封面解密（VM 沙箱加载 zzz.js）
+├── lib/
+│   └── hls-url.js         # HLS URL 规范化（剥离 CDN / 本地 proxy 层）
+├── scripts/
+│   ├── install-frontend.js
+│   ├── probe-91sp-deep.js
+│   ├── probe-91sp-player.js
+│   └── probe-playback.js
 ├── package.json           # 后端依赖与脚本
 ├── output/
 │   └── index.json         # 文章元数据索引
