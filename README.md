@@ -1,21 +1,22 @@
 # 学习资料
 
-Node.js 爬虫 + 本地视频库 Web UI —— 爬取 4 个站点的文章元数据与 m3u8 视频地址，提供本地搜索、统一「同步资料」（关键词搜索 / 列表抓取）与 HLS 在线播放。
+Node.js 爬虫 + 本地视频库 Web UI —— 爬取多站点文章元数据与 m3u8 视频地址，提供本地搜索、统一「同步资料」（关键词搜索 / 列表抓取）与 HLS 在线播放。站点配置动态可调，无需改代码即可在页面上增删源站。
 
 ## 功能特性
 
-- **多站点爬取**：同时爬取 4 个源站（91吃瓜 / 91视频 / 51fans / 51爆料），自动按站点去重
-- **今日优先**：列表爬取先抓各站点「今日」；**按站点独立**判断，某站今日为空则回退该站列表第 1 页（前一日）；启动爬取按 `dateModified` 过滤当日/前一日
-- **视频地址解析**：从详情页 `.dplayer` 的 `data-config` 中提取真实 m3u8 URL（自动过滤 pre_ads / post_ads）
+- **动态多站点配置**：站点清单存于 `output/sites.json`，通过 `/api/sites` 接口在页面上增删改后即时生效，爬虫每次抓取前自动重载
+- **多站点并行爬取**：同时爬取所有启用站点（91吃瓜 / 51fans / 51爆料 / 51吃瓜 / 黑料网 / 黑料不打烊），自动按 ID 去重
+- **主题自适应解析**：自动识别 post-card 与 xqbj-list 两种列表主题；归档详情页同时支持 `/archives/ID/` 与 `/archives/ID.html`（如黑料不打烊）两种 URL 格式
+- **今日优先**：列表爬取先抓各站点「今日」分类；**按站点独立**判断，某站今日为空则回退该站列表第 1 页（前一日）；启动爬取按 `dateModified` 过滤当日/前一日
+- **视频地址解析**：从详情页 `.dplayer` 的 `data-config` 中提取真实 m3u8 URL（直链或需二次解析的 player 接口）
 - **日期抓取**：从详情页 `<meta itemprop="datePublished">` 或 JSON-LD 中解析发布日期
 - **内容过滤**：标题或标签含「重口味」「ai」的文章自动筛除
 - **索引写入**：服务启动爬取会**整库替换** `index.json`；界面「同步资料」则 **push 合并**（新条目置顶、同 ID 更新、旧条目保留）
-- **本地搜索**：按标题或 ID 过滤已爬取的记录
-- **同步资料**：同一入口——有关键词则全网搜索同步，无关键词则按页码抓取「今日」+ 列表
-- **收藏**：独立 `output/favorites.json`，同步/爬取不会清空；支持下载 JSON 或地址列表
+- **本地搜索 / 在线搜索**：按标题或 ID 过滤已爬取记录；有关键词则全网搜索同步
+- **收藏**：独立 `output/favorites.json`，同步/爬取不会清空；支持下载 JSON / m3u8 列表
 - **HLS 在线播放**：基于 hls.js + 自定义 ProxyLoader，通过 CORS 代理播放带 AES-128 加密、带时效 auth_key 的 m3u8
 - **URL 刷新**：播放前自动调用 `/api/refresh/:id` 重新抓取详情页，获取未过期的 m3u8 地址
-- **封面按需解密**：封面不落盘，通过 `/api/cover/:id` 实时抓取并内存解密后返回
+- **封面按需解密**：封面不落盘，通过 `/api/cover/:id` 实时抓取并内存解密后返回（源站封面为 AES 加密，通过源站 `zzz.js` 在 VM 沙箱中解密）
 - **自定义播放器**：自绘控制栏（进度条/缓冲条/音量/倍速/全屏）、键盘快捷键、记忆播放进度
 - **深色主题 UI**：金色渐变点缀、毛玻璃头部、卡片悬停动效、响应式布局
 
@@ -24,7 +25,7 @@ Node.js 爬虫 + 本地视频库 Web UI —— 爬取 4 个站点的文章元数
 ```
 StudyMaterials/
 ├── server.js              # Express 服务器：API + CORS 代理 + 静态资源
-├── crawler.js             # 爬虫主模块（crawl / parseDetailPage / loadIndex）
+├── crawler.js             # 爬虫主模块（crawl / parseDetailPage / 站点配置加载）
 ├── image-decrypt.js       # 源站 AES 加密封面解密（VM 沙箱加载 zzz.js）
 ├── lib/
 │   └── hls-url.js         # HLS URL 规范化（剥离 CDN / 本地 proxy 层）
@@ -35,6 +36,7 @@ StudyMaterials/
 │   └── probe-playback.js
 ├── package.json           # 后端依赖与脚本
 ├── output/
+│   ├── sites.json         # 站点配置（动态加载，页面可改）
 │   └── index.json         # 文章元数据索引
 ├── public/
 │   └── build/             # React 构建产物（由 Express 静态托管，已预构建）
@@ -70,7 +72,7 @@ npm start        # 启动服务器，打开 http://localhost:3000
 已加载 N 条记录
 ```
 
-服务器启动时会自动后台爬取各站点「今日」内容；若某站今日为空，则单独回退抓取该站列表第 1 页（前一日）。
+服务器启动时会自动后台爬取各启用站点「今日」内容并保证每站至少 50 条（`minPerSite`），整库替换 `index.json`；若某站今日为空，则单独回退抓取该站列表第 1 页（前一日）。
 
 ### 修改端口
 
@@ -115,6 +117,32 @@ npm run dev       # 启动在 http://localhost:5173，已配置 /api /proxy 代�
 | `npm run dev` | 启动 Vite 前端开发服务器（热更新），默认 :5173 |
 | `npm run crawl -- [opts]` | 命令行运行爬虫，参数见下文 |
 
+## 站点配置
+
+站点清单存于 `output/sites.json`，爬虫每次 `crawl` 前自动重载，支持页面（`/api/sites`）修改后即时生效。每条配置字段：
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `url` | 站点根 URL | 必填 |
+| `name` | 显示名（91吃瓜 / 51fans …） | `url` |
+| `todayPath` | 「今日」分类路径（如 `/category/zxcghl/`、`/order/today/`） | 空（无则直接抓列表第 1 页） |
+| `archiveSuffix` | 归档详情页 URL 后缀：`/`（`/archives/ID/`）或 `.html`（`/archives/ID.html`，如黑料不打烊） | `/` |
+| `enabled` | 是否启用（禁用站点不参与抓取） | `true` |
+
+当前内置站点：
+
+| 名称 | URL | 今日分类 | 归档格式 | 状态 |
+|------|-----|----------|----------|------|
+| 91吃瓜 | `https://armed.izbfsaxh.cc` | `/category/zxcghl/` | `/archives/ID/` | 启用 |
+| 91视频 | `https://d1ve8vvwughzqa.cloudfront.net` | `/category/jrxw1/` | `/archives/ID/` | 禁用（player 接口失效） |
+| 51fans | `https://breast.eiejvjgex.cc` | `/order/today/` | `/archives/ID/` | 启用 |
+| 51爆料 | `https://assert.pbtiodqn.cc` | `/category/jrbl/` | `/archives/ID/` | 启用 |
+| 51吃瓜 | `https://band.hkllewakv.cc` | `/category/wpcz/` | `/archives/ID/` | 启用 |
+| 黑料网 | `https://d6lvl8l2l26yp.cloudfront.net` | `/category/wpcz/` | `/archives/ID/` | 启用 |
+| 黑料不打烊 | `https://wiki.lgbtoexf.cc` | `/category/24hcg/` | `/archives/ID.html` | 启用 |
+
+> 源站域名经常更换。当某站失效时，在页面站点配置里替换 `url`（同主题站点通常 `todayPath` 不变）即可，无需改代码。封面解密用的 `zzz.js` 由各 post-card 源站同源提供（`/usr/plugins/tbxw/js/zzz.js`），`image-decrypt.js` 指向当前存活的 91吃瓜镜像。
+
 ## 爬虫命令行用法
 
 `crawler.js` 可独立运行，无需启动服务器：
@@ -145,7 +173,7 @@ npm run crawl -- --pages 1 --out ./output --concurrency 5
 | `--search-pages <N>` | 搜索结果页数 | `1` |
 | `--limit <N>` | 最多处理文章数（0=全部） | `0` |
 | `--out <dir>` | 输出目录 | `./output` |
-| `--concurrency <N>` | 详情页并发数 | `3` |
+| `--concurrency <N>` | 详情页并发数 | `6` |
 | `--save-json <path>` | 元数据 JSON 路径 | `./output/index.json` |
 
 ## 播放器操作
@@ -168,14 +196,17 @@ npm run crawl -- --pages 1 --out ./output --concurrency 5
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/videos` | 获取全部视频列表（可选 `?q=关键词` 本地搜索） |
+| GET | `/api/videos` | 视频列表（可选 `?q=关键词` 本地搜索；仅返回有视频地址的） |
+| GET | `/api/sites` | 读取站点配置 |
+| POST | `/api/sites` | 保存站点配置（body：`{ sites: [...] }`，保存后即时生效） |
 | GET | `/api/favorites` | 收藏列表（独立 `favorites.json`，不受爬取清空影响） |
 | POST | `/api/favorites` | 加入收藏（body 含条目快照） |
 | DELETE | `/api/favorites/:id` | 取消收藏 |
-| GET | `/api/favorites/download` | 下载收藏（`?format=json` 或 `txt`） |
+| GET | `/api/favorites/download` | 下载收藏（`?format=json` 或 `txt` / `m3u8`） |
 | GET | `/api/refresh/:id` | 刷新某文章的 m3u8 URL（重新抓取详情页获取未过期地址） |
 | GET | `/api/cover/:id` | 实时抓取并解密封面图，内存返回（不落盘） |
 | POST | `/api/search-online` | 在线搜索并爬取，body：`{ keyword, pages }` |
+| POST | `/api/sync-tags` | 批量按标签搜索同步，body：`{ tags, pages }` |
 | POST | `/api/crawl` | 爬取列表页，body：`{ pageStart, pageEnd }` |
 | GET | `/proxy/<enc-url>` | CORS 代理（m3u8 / TS / AES key），URL 需 encodeURIComponent |
 | GET | `/*` | SPA 兜底，返回 React `index.html` |
@@ -188,9 +219,9 @@ npm run crawl -- --pages 1 --out ./output --concurrency 5
 {
   "id": "111056",
   "title": "文章标题",
-  "url": "https://bite.ygvttlxzy.cc/archives/111056/",
-  "siteUrl": "https://bite.ygvttlxzy.cc",
-  "coverUrl": "https://.../cover.jpg",
+  "url": "https://armed.izbfsaxh.cc/archives/111056/",
+  "siteUrl": "https://armed.izbfsaxh.cc",
+  "coverUrl": "https://.../cover.jpeg",
   "video": { "url": "https://.../index.m3u8?auth_key=...", "type": "hls" },
   "tags": ["标签1", "标签2"],
   "category": "分类名",
@@ -198,16 +229,24 @@ npm run crawl -- --pages 1 --out ./output --concurrency 5
 }
 ```
 
+> 黑料不打烊等站点的 `url` 形如 `https://wiki.lgbtoexf.cc/archives/218652.html`（`.html` 后缀），由站点配置的 `archiveSuffix` 字段决定。
+
 ## 常见问题
 
 **Q：视频播放失败，提示 keyLoadError / 403？**
 A：m3u8 URL 中的 `auth_key` 是有时效的。播放器会在播放前自动调用 `/api/refresh/:id` 重新获取最新地址。若仍失败，可能是源站对该视频已下线或更换了 CDN。
 
+**Q：封面不显示？**
+A：源站封面为 AES 加密，由 `image-decrypt.js` 通过源站 `zzz.js`（`/usr/plugins/tbxw/js/zzz.js`）在 VM 沙箱中解密。`image-decrypt.js` 顶部 `BASE_URL` 需指向一个存活的 post-card 源站；若该站宕机则所有加密封面无法解密，更换到另一存活站点即可。
+
+**Q：某站点抓不到内容 / 视频地址为空？**
+A：源站域名常更换或 player 接口偶尔失效。先在页面站点配置里把 `url` 替换为新地址（同主题站点 `todayPath` 通常不变）；若 player 接口对全部 cid 返回空（如旧 91视频），可临时把该站 `enabled` 设为 `false`。
+
 **Q：代理返回 502？**
 A：源站 CDN 要求 `Referer` 匹配目标 origin。代理已根据目标 URL 自动派生 Referer，如源站策略变更可能需要调整 `server.js` 中的 proxy 实现。
 
 **Q：端口被占用？**
-A：用 `PORT=新端口 npm start` 指定其他端口。开发模式下，`frontend/vite.config.js` 中的代理目标默认指向 `:3000`，若后端端口改了需同步修改。
+A：用 `PORT=新端口 npm start` 指定其他端口（服务器也会自动递增寻找可用端口）。开发模式下，`frontend/vite.config.js` 中的代理目标默认指向 `:3000`，若后端端口改了需同步修改。
 
 **Q：`npm install` 很慢或卡住？**
 A：postinstall 会再装一次前端依赖。如已装好可中断，直接 `npm start`；或用 `npm install --ignore-scripts` 跳过前端依赖，仅手动在 `frontend/` 下安装一次。

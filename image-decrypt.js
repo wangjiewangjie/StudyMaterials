@@ -8,9 +8,11 @@ const vm = require('vm');
 const axios = require('axios');
 const CryptoJS = require('crypto-js');
 
-const BASE_URL = 'https://bite.ygvttlxzy.cc';
+// zzz.js 由各 post-card 源站同源提供（含 decryptImage）。指向当前存活的 91吃瓜
+// 镜像（旧 bite.ygvttlxzy.cc 已宕机）；各站 zzz.js 内容一致，解密逻辑通用。
+const BASE_URL = 'https://armed.izbfsaxh.cc';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-const ZZZ_URL = BASE_URL + '/usr/plugins/tbxw/js/zzz.js?v=20260630e';
+const ZZZ_URL = BASE_URL + '/usr/plugins/tbxw/js/zzz.js';
 
 let _sandbox = null;
 let _initPromise = null;

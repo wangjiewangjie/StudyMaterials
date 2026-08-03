@@ -1,13 +1,11 @@
 // crawler.js
 // Multi-site aggregated crawler for adult video content.
 //
-// Supported sites (configured in SITES array):
-//   - bite.ygvttlxzy.cc      (post-card theme, direct m3u8 in data-config.video.url)
-//   - d1ve8vvwughzqa.cloudfront.net (post-card theme, player endpoint in data-config.url)
-//   - breast.eiejvjgex.cc    (xqbj-list theme, direct m3u8 in data-config.video.url)
-//   - assert.pbtiodqn.cc     (post-card theme, redirects to assert.pcilgzsm.com)
+// 站点配置从 output/sites.json 动态加载（见 loadSiteConfigs），
+// 支持页面（/api/sites）修改后即时生效。每个站点支持 post-card 或 xqbj-list 主题，
+// 视频地址从详情页 .dplayer[data-config] 中提取（直链 m3u8 或需二次解析的 player 接口）。
 //
-// The crawler fetches list/search pages from ALL sites in parallel,
+// The crawler fetches list/search pages from ALL enabled sites in parallel,
 // aggregates articles by ID, then fetches detail pages for each.
 //
 // Usage (CLI):
@@ -21,13 +19,68 @@ const https = require('https');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-const SITES = [
-  'https://bite.ygvttlxzy.cc',
-  'https://d1ve8vvwughzqa.cloudfront.net',
-  'https://breast.eiejvjgex.cc',
-  'https://assert.pbtiodqn.cc',
+// 站点配置：从 output/sites.json 动态加载，可在页面修改后即时生效。
+// 每个站点：{ url, name, todayPath, enabled, archiveSuffix? }
+//   archiveSuffix：归档详情页 URL 后缀，默认 "/"（/archives/ID/），
+//                  ".html" 用于 /archives/ID.html 格式（如 wiki 站）。
+const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
+const DEFAULT_SITE_CONFIGS = [
+  { url: 'https://armed.izbfsaxh.cc', name: '91吃瓜', todayPath: '/category/zxcghl/', enabled: true },
+  { url: 'https://d1ve8vvwughzqa.cloudfront.net', name: '91视频', todayPath: '/category/jrxw1/', enabled: false },
+  { url: 'https://breast.eiejvjgex.cc', name: '51fans', todayPath: '/order/today/', enabled: true },
+  { url: 'https://assert.pbtiodqn.cc', name: '51爆料', todayPath: '/category/jrbl/', enabled: true },
+  { url: 'https://band.hkllewakv.cc', name: '51吃瓜', todayPath: '/category/wpcz/', enabled: true },
+  { url: 'https://d6lvl8l2l26yp.cloudfront.net', name: '黑料网', todayPath: '/category/wpcz/', enabled: true },
+  { url: 'https://wiki.lgbtoexf.cc', name: '黑料不打烊', todayPath: '/category/24hcg/', archiveSuffix: '.html', enabled: true },
 ];
-const BASE_URL = SITES[0]; // backwards compat for server.js
+
+function loadSiteConfigs() {
+  try {
+    const raw = fs.readFileSync(SITES_PATH, 'utf8');
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr) && arr.length) return arr;
+  } catch (_) { /* fall through to defaults */ }
+  return DEFAULT_SITE_CONFIGS.map((s) => ({ ...s }));
+}
+
+function saveSiteConfigs(configs) {
+  fs.mkdirSync(path.dirname(SITES_PATH), { recursive: true });
+  fs.writeFileSync(SITES_PATH, JSON.stringify(configs, null, 2), 'utf8');
+}
+
+// 当前生效配置（模块级缓存，reloadSites() 刷新）。
+// SITES / SITE_TODAY_PATH / SITE_ARCHIVE_SUFFIX / BASE_URL 用 let，便于 reloadSites
+// 重新赋值；模块内函数引用的是变量本身，reload 后下次调用自动用新值。
+let SITE_CONFIGS = loadSiteConfigs();
+let SITES = [];
+let SITE_TODAY_PATH = {};   // url -> 今日分类路径
+let SITE_ARCHIVE_SUFFIX = {}; // url -> 归档详情页后缀（"/" 或 ".html"）
+let BASE_URL = '';
+
+// 从 SITE_CONFIGS 重建派生映射（init 与 reloadSites 共用，避免重复）。
+function rebuildSiteMaps() {
+  const enabled = SITE_CONFIGS.filter((s) => s.enabled !== false);
+  SITES = enabled.map((s) => s.url);
+  SITE_TODAY_PATH = {};
+  SITE_ARCHIVE_SUFFIX = {};
+  for (const s of enabled) {
+    if (s.todayPath) SITE_TODAY_PATH[s.url] = s.todayPath;
+    SITE_ARCHIVE_SUFFIX[s.url] = s.archiveSuffix || '/';
+  }
+  BASE_URL = SITES[0] || ''; // backwards compat（server.js 应优先用 getBaseUrl()）
+}
+rebuildSiteMaps();
+
+// 重新加载站点配置（配置文件被外部修改后调用，例如页面保存）。
+function reloadSites() {
+  SITE_CONFIGS = loadSiteConfigs();
+  rebuildSiteMaps();
+}
+
+function getSiteConfigs() { return SITE_CONFIGS; }
+function getSites() { return SITES; }
+function getBaseUrl() { return BASE_URL; }
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 // Articles whose title or tags contain any of these keywords are excluded from
@@ -46,6 +99,18 @@ function matchesExclude(article) {
     }
   }
   return false;
+}
+
+// In-place remove articles whose title or tags match EXCLUDE_KEYWORDS.
+// `label` is used in the log line (e.g. "title" / "tag").
+function filterExcluded(articles, label, log) {
+  const before = articles.length;
+  for (let i = articles.length - 1; i >= 0; i--) {
+    if (matchesExclude(articles[i])) articles.splice(i, 1);
+  }
+  const removed = before - articles.length;
+  if (removed > 0) log(`Excluded ${removed} articles by ${label} (重口味/ai)`);
+  return removed;
 }
 
 // Keep-alive agents: reuse TCP connections across requests to the same host.
@@ -71,14 +136,16 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Extract article ID from any archive URL (site-agnostic).
+// Extract article ID from any archive URL (site-agnostic). Matches both
+// "/archives/123/" and "/archives/123.html" (the latter used by wiki-style sites).
 function normalizeArchiveUrl(href) {
-  const m = href.match(/\/archives\/(\d+)\//);
+  const m = href.match(/\/archives\/(\d+)(?:\.html)?\/?/);
   return m ? { id: m[1] } : null;
 }
 
 function archiveUrl(site, id) {
-  return `${site}/archives/${id}/`;
+  const suffix = SITE_ARCHIVE_SUFFIX[site] || '/';
+  return `${site}/archives/${id}${suffix}`;
 }
 
 function listPageUrl(site, pageNum) {
@@ -87,14 +154,7 @@ function listPageUrl(site, pageNum) {
 
 // Per-site "今日" (today) entry path — the day's freshest content, used as the
 // priority source on every list-mode crawl. Each site exposes it under a
-// different route, so we map by site origin.
-const SITE_TODAY_PATH = {
-  'https://bite.ygvttlxzy.cc': '/category/zxcghl/',          // 今日吃瓜
-  'https://d1ve8vvwughzqa.cloudfront.net': '/category/jrxw1/', // 今日更新
-  'https://breast.eiejvjgex.cc': '/order/today/',            // 今日更新
-  'https://assert.pbtiodqn.cc': '/category/jrbl/',           // 今日爆料
-};
-
+// different route, so we map by site origin.（SITE_TODAY_PATH 由站点配置构建，见文件顶部）
 function todayPageUrl(site, pageNum) {
   const p = SITE_TODAY_PATH[site];
   if (!p) return null;
@@ -321,20 +381,73 @@ function parseDetailPage(html) {
   return result;
 }
 
-// Resolve a player endpoint URL (d1ve-style) to get the real m3u8 URL.
+// Extract the m3u8 URL from a player-endpoint response. Two response shapes
+// exist across sites: {data:"<url>"} (string, ticket-flow sites) and
+// {data:[{url}]} (array, legacy d1ve-style).
+function extractPlayerUrl(resp) {
+  const d = resp && resp.data;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d) && d[0]) return d[0].url || null;
+  return (d && d.url) || null;
+}
+
+// Resolve a player endpoint URL to the real m3u8 URL.
+//   /action/player/get_play_url endpoints require a server-issued one-time
+//   ticket (per the site's artplayer-plugin-authentication): GET
+//   /action/player/ticket -> {data:{ticket}}, then POST get_play_url with
+//   {ticket, env}. The env fingerprint is only logged server-side, not enforced,
+//   so a minimal payload suffices. Other player endpoints are GET directly.
+//   Per-cid replay triggers "请求过于频繁" / "票据无效"; we retry once with backoff.
 async function resolvePlayerUrl(siteUrl, playerPath, log) {
   const fullUrl = playerPath.startsWith('http') ? playerPath : siteUrl + playerPath;
-  try {
-    const res = await getWithRetry(fullUrl, client, 2, headersFor(siteUrl));
-    const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-    const url = data && data.data && data.data[0] && data.data[0].url;
-    if (url) return url;
-    log(`  [player] endpoint returned no url: ${fullUrl}`);
-    return null;
-  } catch (err) {
-    log(`  [player] resolve failed: ${err.message}`);
-    return null;
+  const headers = headersFor(siteUrl);
+  const needsTicket = fullUrl.includes('/get_play_url');
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      let resp;
+      if (needsTicket) {
+        const ticketUrl = fullUrl.replace('/get_play_url', '/ticket');
+        const tRes = await getWithRetry(ticketUrl, client, 2, headers);
+        const tData = typeof tRes.data === 'string' ? JSON.parse(tRes.data) : tRes.data;
+        const ticket = tData && tData.data && tData.data.ticket;
+        if (!ticket) {
+          log(`  [player] ticket FAIL (${(tData && tData.msg) || 'no ticket'}): ${ticketUrl}`);
+          return null;
+        }
+        log(`  [player] ticket OK (ttl=${tData.data.ttl}s) cid=${(fullUrl.match(/cid=(\d+)/) || [])[1] || '?'}`);
+        const body = new URLSearchParams();
+        body.append('ticket', ticket);
+        body.append('env', JSON.stringify({ source: 'web', ua: UA }));
+        const pRes = await client.post(fullUrl, body.toString(), {
+          headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        resp = typeof pRes.data === 'string' ? JSON.parse(pRes.data) : pRes.data;
+      } else {
+        const res = await getWithRetry(fullUrl, client, 2, headers);
+        resp = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+      }
+      const url = extractPlayerUrl(resp);
+      if (url) {
+        log(`  [player] resolved${needsTicket ? ' (ticket)' : ''}: ${url.slice(0, 80)}`);
+        return url;
+      }
+      const msg = (resp && resp.msg) || '';
+      if (/频繁|稍后/.test(msg) && attempt === 0) {
+        log(`  [player] rate limited (msg="${msg}"), retry ${attempt + 1}/2 after backoff`);
+        await sleep(1500 + Math.floor(Math.random() * 1000));
+        continue;
+      }
+      log(`  [player] no url (msg="${msg || 'empty'}", status=${resp && resp.status}) ${needsTicket ? 'POST' : 'GET'} ${fullUrl}`);
+      return null;
+    } catch (err) {
+      const code = err.code || (err.response && err.response.status) || '';
+      log(`  [player] resolve error (${code} ${err.message}). ${fullUrl}`);
+      if (attempt === 0) { await sleep(800); continue; }
+      return null;
+    }
   }
+  return null;
 }
 
 // ---------- concurrency runner (p-limit style: simple, no reject on first error) ----------
@@ -403,89 +516,89 @@ function mergeIntoIndex(existing, incoming) {
 
 // ---------- multi-site aggregated fetch ----------
 
-// Aggregate results from a Promise.allSettled into a deduped article list.
-function aggregateSettled(results, sites, log) {
+// Dedupe articles by id, preserving first-seen order.
+function dedupeById(articles) {
+  const seen = new Set();
+  const out = [];
+  for (const a of articles) {
+    if (!seen.has(a.id)) { seen.add(a.id); out.push(a); }
+  }
+  return out;
+}
+
+// Run an async task against every enabled site in parallel, then aggregate and
+// dedupe the returned article arrays. taskFn(site) does its own success logging
+// and returns an article array (or { articles }); rejections are logged here.
+async function mapAllSites(taskFn, log) {
+  const results = await Promise.allSettled(SITES.map((site) => taskFn(site)));
   const aggregated = [];
-  const seenIds = new Set();
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.status === 'fulfilled') {
-      if (Array.isArray(r.value)) {
-        for (const a of r.value) {
-          if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
-        }
-      } else if (r.value && r.value.articles) {
-        log(`  [${sites[i]}] -> ${r.value.articles.length} articles`);
-        for (const a of r.value.articles) {
-          if (!seenIds.has(a.id)) { seenIds.add(a.id); aggregated.push(a); }
-        }
-      }
+      const arts = Array.isArray(r.value) ? r.value : (r.value && r.value.articles) || [];
+      for (const a of arts) aggregated.push(a);
     } else {
-      log(`  [${sites[i]}] FAILED: ${r.reason && r.reason.message}`);
+      log(`  [${SITES[i]}] FAILED: ${r.reason && r.reason.message}`);
     }
   }
-  return aggregated;
+  return dedupeById(aggregated);
 }
 
 // Fetch a list/search page from ALL sites in parallel, aggregate articles by ID.
 async function fetchListPageFromAllSites(pageNum, log, mode) {
-  const results = await Promise.allSettled(
-    SITES.map(async (site) => {
-      const url = mode.type === 'search' ? searchUrl(site, mode.keyword, pageNum) : listPageUrl(site, pageNum);
-      log(`[${mode.type}] ${site} page ${pageNum}`);
-      const res = await getWithRetry(url, client, 3, headersFor(site));
-      return { site, articles: parseListPage(res.data, site) };
-    })
-  );
-  return aggregateSettled(results, SITES, log);
+  return mapAllSites(async (site) => {
+    const url = mode.type === 'search' ? searchUrl(site, mode.keyword, pageNum) : listPageUrl(site, pageNum);
+    log(`[${mode.type}] ${site} page ${pageNum}`);
+    const res = await getWithRetry(url, client, 3, headersFor(site));
+    const arts = parseListPage(res.data, site);
+    log(`  [${site}] -> ${arts.length} articles`);
+    return arts;
+  }, log);
 }
 
 // Fetch "今日" per site. Each site is handled independently: if its today
 // category returns zero articles, fall back to list page 1 (previous day).
 async function fetchTodayPerSiteWithFallback(log) {
-  const results = await Promise.allSettled(
-    SITES.map(async (site) => {
-      const articles = [];
-      const seen = new Set();
-      const add = (a) => { if (!seen.has(a.id)) { seen.add(a.id); articles.push(a); } };
+  return mapAllSites(async (site) => {
+    const articles = [];
+    const seen = new Set();
+    const add = (a) => { if (!seen.has(a.id)) { seen.add(a.id); articles.push(a); } };
 
-      let source = 'today';
-      const todayPath = SITE_TODAY_PATH[site];
+    let source = 'today';
+    const todayPath = SITE_TODAY_PATH[site];
 
-      if (todayPath) {
-        for (let pg = 1; pg <= 2; pg++) {
-          const url = todayPageUrl(site, pg);
-          if (!url) break;
-          try {
-            log(`[today] ${site} page ${pg}`);
-            const res = await getWithRetry(url, client, 2, headersFor(site));
-            parseListPage(res.data, site).forEach(add);
-          } catch (err) {
-            if (pg === 1) log(`  [today ${site}] FAILED: ${err.message}`);
-            break;
-          }
-        }
-      }
-
-      if (articles.length === 0) {
-        source = 'fallback';
-        log(`[today] ${site} -> 0 条，回退列表第 1 页（前一日）`);
+    if (todayPath) {
+      for (let pg = 1; pg <= 2; pg++) {
+        const url = todayPageUrl(site, pg);
+        if (!url) break;
         try {
-          const res = await getWithRetry(listPageUrl(site, 1), client, 3, headersFor(site));
+          log(`[today] ${site} page ${pg}`);
+          const res = await getWithRetry(url, client, 2, headersFor(site));
           parseListPage(res.data, site).forEach(add);
-          log(`  [fallback ${site}] -> ${articles.length} articles`);
         } catch (err) {
-          log(`  [fallback ${site}] FAILED: ${err.message}`);
+          if (pg === 1) log(`  [today ${site}] FAILED: ${err.message}`);
+          break;
         }
-      } else {
-        log(`  [today ${site}] -> ${articles.length} articles`);
       }
+    }
 
-      articles.forEach((a) => { a._listSource = source; });
-      return articles;
-    })
-  );
-  return aggregateSettled(results, SITES, log);
+    if (articles.length === 0) {
+      source = 'fallback';
+      log(`[today] ${site} -> 0 条，回退列表第 1 页（前一日）`);
+      try {
+        const res = await getWithRetry(listPageUrl(site, 1), client, 3, headersFor(site));
+        parseListPage(res.data, site).forEach(add);
+        log(`  [fallback ${site}] -> ${articles.length} articles`);
+      } catch (err) {
+        log(`  [fallback ${site}] FAILED: ${err.message}`);
+      }
+    } else {
+      log(`  [today ${site}] -> ${articles.length} articles`);
+    }
+
+    articles.forEach((a) => { a._listSource = source; });
+    return articles;
+  }, log);
 }
 
 // Fetch list pages per site until each site has contributed at least minArticles.
@@ -567,18 +680,10 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
     if (pageNum < maxPages) await sleep(150);
   }
 
-  const aggregated = [];
-  const seenIds = new Set();
   for (const site of SITES) {
     log(`[minPerSite] ${site}: ${siteArticles[site].length} articles`);
-    for (const a of siteArticles[site]) {
-      if (!seenIds.has(a.id)) {
-        seenIds.add(a.id);
-        aggregated.push(a);
-      }
-    }
   }
-  return aggregated;
+  return dedupeById(SITES.flatMap((site) => siteArticles[site]));
 }
 
 // Keep articles whose content date matches the list source (today vs fallback).
@@ -631,6 +736,9 @@ async function crawl(opts = {}) {
 
   fs.mkdirSync(outDir, { recursive: true });
 
+  // 每次抓取前重新加载站点配置，确保页面修改后立即生效。
+  reloadSites();
+
   const mode = searchKeyword
     ? { type: 'search', keyword: searchKeyword, label: `search "${searchKeyword}" pages 1..${searchPages}` }
     : minPerSite > 0
@@ -677,13 +785,7 @@ async function crawl(opts = {}) {
   }
 
   // Pre-filter by title to avoid wasting detail-page fetches on excluded content.
-  const beforeTitleFilter = newArticles.length;
-  for (let i = newArticles.length - 1; i >= 0; i--) {
-    if (matchesExclude(newArticles[i])) newArticles.splice(i, 1);
-  }
-  if (beforeTitleFilter - newArticles.length > 0) {
-    log(`Excluded ${beforeTitleFilter - newArticles.length} articles by title (重口味/ai)`);
-  }
+  filterExcluded(newArticles, 'title', log);
 
   if (newArticles.length === 0) {
     // Keep the existing index — do not wipe it when a crawl finds nothing
@@ -726,13 +828,7 @@ async function crawl(opts = {}) {
   });
 
   // Post-filter by tags (only available after detail parse).
-  const beforeTagFilter = newArticles.length;
-  for (let i = newArticles.length - 1; i >= 0; i--) {
-    if (matchesExclude(newArticles[i])) newArticles.splice(i, 1);
-  }
-  if (beforeTagFilter - newArticles.length > 0) {
-    log(`Excluded ${beforeTagFilter - newArticles.length} articles by tag (重口味/ai)`);
-  }
+  filterExcluded(newArticles, 'tag', log);
 
   if (todayOnly) {
     filterArticlesByModifiedDate(newArticles, log);
@@ -806,4 +902,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { crawl, parseDetailPage, resolvePlayerUrl, loadIndex, mergeIntoIndex, BASE_URL, SITES, UA };
+module.exports = {
+  crawl, parseDetailPage, resolvePlayerUrl, loadIndex, mergeIntoIndex,
+  // SITES 仍被 scripts/probe-sites.js 引用；BASE_URL 请用 getBaseUrl() 访问。
+  SITES, UA,
+  loadSiteConfigs, saveSiteConfigs, reloadSites,
+  getSiteConfigs, getSites, getBaseUrl,
+};

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import {
   Layout, Input, Button, Card, Tag, Modal, Empty, Spin, Typography,
-  Space, Popover, InputNumber, Pagination, App as AntdApp, Tooltip, Dropdown, Select,
+  Space, Popover, InputNumber, Pagination, App as AntdApp, Tooltip, Dropdown, Select, Switch,
 } from 'antd';
 import {
   SearchOutlined, SyncOutlined, LinkOutlined,
@@ -9,19 +9,30 @@ import {
   CalendarOutlined, ClearOutlined, ReloadOutlined,
   StarOutlined, StarFilled, DownloadOutlined, PlayCircleFilled,
   CopyOutlined, VerticalAlignTopOutlined, CloseOutlined, TagsOutlined,
-  ReadOutlined,
+  ReadOutlined, SettingOutlined, PlusOutlined, DeleteOutlined,
 } from '@ant-design/icons';
 import VideoPlayer from './VideoPlayer.jsx';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
 
+// 站点名称映射：默认值与 crawler.js 的 DEFAULT_SITE_CONFIGS 一致，
+// App 加载 /api/sites 后会用配置里的 name 覆盖（hostname -> name）。
 const SITE_NAMES = {
   'bite.ygvttlxzy.cc': '91吃瓜',
   'd1ve8vvwughzqa.cloudfront.net': '91视频',
   'breast.eiejvjgex.cc': '51fans',
   'assert.pbtiodqn.cc': '51爆料',
 };
+let SITE_NAME_MAP = { ...SITE_NAMES };
+function setSiteNameMap(configs) {
+  const map = { ...SITE_NAMES };
+  (configs || []).forEach((s) => {
+    if (!s || !s.url) return;
+    try { map[new URL(s.url).hostname] = s.name || map[new URL(s.url).hostname]; } catch (_) {}
+  });
+  SITE_NAME_MAP = map;
+}
 
 const PAGE_SIZE = 60;
 
@@ -29,7 +40,7 @@ function siteLabel(siteUrl) {
   if (!siteUrl) return '未知来源';
   try {
     const host = new URL(siteUrl).hostname;
-    return SITE_NAMES[host] || host.split('.')[0];
+    return SITE_NAME_MAP[host] || host.split('.')[0];
   } catch (_) {
     return String(siteUrl);
   }
@@ -485,6 +496,146 @@ function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange
   );
 }
 
+// 站点配置 Modal：增删改 url / name / todayPath / enabled。
+// 保存后写入 output/sites.json，crawler 下次 crawl 自动生效。
+function SitesConfigModal({ open, onClose, onSaved }) {
+  const { message } = AntdApp.useApp();
+  const [list, setList] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/sites');
+      const data = await res.json();
+      setList((data.sites || []).map((s) => ({ ...s })));
+    } catch (e) {
+      message.error('加载站点配置失败：' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [message]);
+
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+
+  const update = (i, patch) => {
+    setList((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  };
+  const remove = (i) => setList((prev) => prev.filter((_, idx) => idx !== i));
+  const add = () => setList((prev) => [...prev, { url: '', name: '', todayPath: '', enabled: true }]);
+
+  const save = async () => {
+    // 简单校验：url 非空且不重复
+    const seen = new Set();
+    for (const s of list) {
+      const u = (s.url || '').trim();
+      if (!u) { message.warning('存在空的站点地址，请填写或删除'); return; }
+      if (seen.has(u)) { message.warning(`站点地址重复：${u}`); return; }
+      seen.add(u);
+    }
+    if (list.length === 0) { message.warning('至少保留一个站点'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch('/api/sites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sites: list }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '保存失败');
+      message.success(`已保存 ${data.sites.length} 个站点，下次同步生效`);
+      onSaved && onSaved(data.sites);
+      onClose();
+    } catch (e) {
+      message.error('保存失败：' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title="站点配置"
+      width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth - 32 : 720)}
+      destroyOnClose
+      centered
+      footer={
+        <div className="flex items-center justify-between">
+          <Button icon={<PlusOutlined />} onClick={add} disabled={saving}>添加站点</Button>
+          <Space>
+            <Button onClick={onClose} disabled={saving}>取消</Button>
+            <Button type="primary" loading={saving} onClick={save}>保存</Button>
+          </Space>
+        </div>
+      }
+    >
+      <Spin spinning={loading}>
+        <Text type="secondary" className="text-[12px] block mb-3 leading-relaxed">
+          配置爬虫站点。保存后写入 <code>output/sites.json</code>，下次「同步资料」或启动爬取即生效。
+          <span className="block mt-1 opacity-80">「今日路径」为可选高级项，留空则该站只抓列表页；禁用的站点不参与抓取。</span>
+        </Text>
+        <div className="space-y-3 max-h-[52vh] overflow-auto pr-1">
+          {list.map((s, i) => (
+            <div key={i} className="border border-ph-border rounded-lg p-3 bg-ph-card/60 space-y-2">
+              <div className="flex items-center gap-2">
+                <Input
+                  size="small"
+                  className="flex-1"
+                  placeholder="站点名称（如 91吃瓜）"
+                  value={s.name}
+                  onChange={(e) => update(i, { name: e.target.value })}
+                  disabled={saving}
+                />
+                <Tooltip title={s.enabled ? '已启用' : '已禁用'}>
+                  <Switch
+                    size="small"
+                    checked={s.enabled !== false}
+                    onChange={(v) => update(i, { enabled: v })}
+                    disabled={saving}
+                  />
+                </Tooltip>
+                <Tooltip title="删除该站点">
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => remove(i)}
+                    disabled={saving}
+                  />
+                </Tooltip>
+              </div>
+              <Input
+                size="small"
+                placeholder="https://站点地址（含 https://）"
+                value={s.url}
+                onChange={(e) => update(i, { url: e.target.value })}
+                disabled={saving}
+                addonBefore={<GlobalOutlined className="text-ph-text-muted" />}
+              />
+              <Input
+                size="small"
+                placeholder="今日路径（可选，如 /category/zxcghl/）"
+                value={s.todayPath}
+                onChange={(e) => update(i, { todayPath: e.target.value })}
+                disabled={saving}
+              />
+            </div>
+          ))}
+          {list.length === 0 && (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无站点，点击「添加站点」" />
+          )}
+        </div>
+      </Spin>
+    </Modal>
+  );
+}
+
 function FilterStrip({ children }) {
   return (
     <div
@@ -553,6 +704,7 @@ export default function App() {
   const [loadingList, setLoadingList] = useState(false);
   const [lastQuery, setLastQuery] = useState('');
   const [showTop, setShowTop] = useState(false);
+  const [sitesOpen, setSitesOpen] = useState(false);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const TAG_COLLAPSED_COUNT = 12;
 
@@ -593,6 +745,25 @@ export default function App() {
     loadVideos('');
     loadFavorites();
   }, [loadVideos, loadFavorites]);
+
+  // 加载站点配置，刷新站点名称映射（让 siteLabel 显示配置中的 name）。
+  const loadSiteConfigs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sites');
+      if (!res.ok) return;
+      const data = await res.json();
+      setSiteNameMap(data.sites || []);
+    } catch (_) { /* ignore */ }
+  }, []);
+  useEffect(() => { loadSiteConfigs(); }, [loadSiteConfigs]);
+
+  // 站点配置保存后：更新名称映射 + 刷新列表让卡片重渲染显示新名称。
+  const handleSitesSaved = useCallback((sites) => {
+    setSiteNameMap(sites || []);
+    setSitesOpen(false);
+    if (!showFavorites) loadVideos(query.trim());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFavorites, query]);
 
   // `/` focuses search; ignore when typing in inputs.
   useEffect(() => {
@@ -968,6 +1139,13 @@ export default function App() {
             }}
             initialKeyword={syncPrefill}
           />
+          <Tooltip title="站点配置">
+            <Button
+              size="middle"
+              icon={<SettingOutlined />}
+              onClick={() => setSitesOpen(true)}
+            />
+          </Tooltip>
           {status && !syncing && (
             <span
               className="hidden xl:inline-flex items-center text-xs text-ph-text-secondary bg-ph-bg/80 border border-ph-border px-3 py-1 rounded-full max-w-[220px] overflow-hidden shrink-0"
@@ -1229,6 +1407,12 @@ export default function App() {
           onToggleFavorite={handleToggleFavorite}
         />
       )}
+
+      <SitesConfigModal
+        open={sitesOpen}
+        onClose={() => setSitesOpen(false)}
+        onSaved={handleSitesSaved}
+      />
     </Layout>
   );
 }

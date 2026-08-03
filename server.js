@@ -10,7 +10,8 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const axios = require('axios');
-const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, BASE_URL, UA } = require('./crawler');
+const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
+  loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getBaseUrl } = require('./crawler');
 const { decryptBuffer } = require('./image-decrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
 
@@ -91,6 +92,12 @@ function writeIndex(articles) {
   } catch (_) {
     indexMtimeMs = Date.now();
   }
+}
+
+// Force getIndex() to reload from disk on next call (after crawl rewrites index.json).
+function bustIndexCache() {
+  indexCache = null;
+  indexMtimeMs = -1;
 }
 
 function getFavorites() {
@@ -221,7 +228,7 @@ app.get('/proxy/*', async (req, res) => {
   try {
     referer = new URL(targetUrl).origin + '/';
   } catch (_) {
-    referer = BASE_URL + '/';
+    referer = getBaseUrl() + '/';
   }
 
   try {
@@ -275,6 +282,39 @@ app.get('/proxy/*', async (req, res) => {
 
 // ---------- API ----------
 
+// 站点配置：读取/保存。配置存于 output/sites.json，crawler 每次 crawl 前重载。
+app.get('/api/sites', (req, res) => {
+  res.json({ sites: getSiteConfigs() });
+});
+
+app.post('/api/sites', (req, res) => {
+  const sites = req.body && req.body.sites;
+  if (!Array.isArray(sites)) return res.status(400).json({ error: 'sites array required' });
+  // 规范化：去空白、补默认值、去重 url（保留首个）
+  const seen = new Set();
+  const clean = [];
+  for (const s of sites) {
+    if (!s || typeof s !== 'object') continue;
+    const url = String(s.url || '').trim().replace(/\/+$/, '');
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    clean.push({
+      url,
+      name: String(s.name || '').trim() || url,
+      todayPath: String(s.todayPath || '').trim(),
+      enabled: s.enabled !== false,
+    });
+  }
+  if (clean.length === 0) return res.status(400).json({ error: '至少需要一个站点' });
+  try {
+    saveSiteConfigs(clean);
+    reloadSites();
+    res.json({ ok: true, sites: getSiteConfigs() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // List all scraped items (optional ?q= for local search)
 // By default returns ALL crawled items so the user can see what was collected
 // from every site, even when the player endpoint is broken and the video URL
@@ -293,35 +333,39 @@ app.get('/api/videos', (req, res) => {
 // Covers are NOT stored on disk: the server fetches the remote coverUrl, decrypts
 // it in memory (source serves AES-encrypted images), and streams the bytes to the
 // client. Nothing sensitive is ever written to the local filesystem.
-function isValidImage(buf) {
-  return (buf[0] === 0xFF && buf[1] === 0xD8) || // JPEG
-         (buf[0] === 0x89 && buf[1] === 0x50) || // PNG
-         (buf[0] === 0x47 && buf[1] === 0x49);   // GIF
+
+// Sniff image magic bytes in one pass — returns { valid, contentType }.
+// Replaces the former isValidImage() + imageContentType() pair.
+function sniffImage(buf) {
+  if (buf[0] === 0xFF && buf[1] === 0xD8) return { valid: true, contentType: 'image/jpeg' };
+  if (buf[0] === 0x89 && buf[1] === 0x50) return { valid: true, contentType: 'image/png' };
+  if (buf[0] === 0x47 && buf[1] === 0x49) return { valid: true, contentType: 'image/gif' };
+  if (buf.length >= 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return { valid: true, contentType: 'image/webp' };
+  return { valid: false, contentType: 'application/octet-stream' };
 }
-function imageContentType(buf) {
-  if (buf[0] === 0xFF && buf[1] === 0xD8) return 'image/jpeg';
-  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
-  if (buf[0] === 0x47 && buf[1] === 0x49) return 'image/gif';
-  if (buf.length >= 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return 'image/webp';
-  return 'application/octet-stream';
+
+// Referer origin for a fetched article: prefer its source site, else derive
+// from its archive URL, else fall back to the first configured site.
+function refererFor(item) {
+  return item.siteUrl || (item.url ? new URL(item.url).origin : getBaseUrl());
 }
 app.get('/api/cover/:id', async (req, res) => {
   const found = findById(req.params.id);
   const item = found && found.item;
   if (!item || !item.coverUrl) return res.status(404).send('no cover');
   try {
-    const refererSite = item.siteUrl || (item.url ? new URL(item.url).origin : BASE_URL);
+    const refererSite = refererFor(item);
     const upstream = await axios.get(item.coverUrl, {
       responseType: 'arraybuffer',
       timeout: 30000,
       headers: { 'User-Agent': UA, Referer: refererSite + '/' },
     });
     let buf = Buffer.from(upstream.data);
-    if (!isValidImage(buf)) {
+    if (!sniffImage(buf).valid) {
       // Source serves encrypted images; decrypt in memory only.
       buf = await decryptBuffer(buf);
     }
-    res.set('Content-Type', imageContentType(buf));
+    res.set('Content-Type', sniffImage(buf).contentType);
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buf);
   } catch (err) {
@@ -338,7 +382,7 @@ app.get('/api/refresh/:id', async (req, res) => {
   if (!found) return res.status(404).json({ error: 'not found' });
   const target = found.item;
   try {
-    const refererSite = target.siteUrl || (target.url ? new URL(target.url).origin : BASE_URL);
+    const refererSite = refererFor(target);
     const r = await axios.get(target.url, {
       timeout: REFRESH_TIMEOUT_MS,
       maxRedirects: 5,
@@ -469,8 +513,7 @@ app.post('/api/search-online', async (req, res) => {
       onLog: (m) => logs.push(m),
     });
     // Crawl rewrote index.json; bust the mtime cache so getIndex reloads.
-    indexCache = null;
-    indexMtimeMs = -1;
+    bustIndexCache();
     const all = getIndex().filter((a) => a.video && a.video.url);
     const qlc = keyword.toLowerCase();
     const items = all
@@ -519,8 +562,7 @@ app.post('/api/sync-tags', async (req, res) => {
     }
 
     // Load final result and calculate actual additions
-    indexCache = null;
-    indexMtimeMs = -1;
+    bustIndexCache();
     const currentIndex = loadIndex(JSON_PATH);
     const actualAdded = currentIndex.length - baselineCount;
     const withVideo = currentIndex.filter((a) => a.video && a.video.url).length;
@@ -546,8 +588,7 @@ app.post('/api/crawl', async (req, res) => {
       concurrency: 3,
       onLog: (m) => logs.push(m),
     });
-    indexCache = null;
-    indexMtimeMs = -1;
+    bustIndexCache();
     res.json({ ok: true, added: result.added, total: result.total, logs });
   } catch (err) {
     res.status(500).json({ error: err.message, logs });
@@ -582,8 +623,7 @@ app.get('*', (req, res) => {
           concurrency: 3,
           onLog: (m) => console.log(m),
         });
-        indexCache = null;
-        indexMtimeMs = -1;
+        bustIndexCache();
         console.log(`启动爬取完成，当前共 ${getIndex().length} 条记录`);
       } catch (e) {
         console.warn('启动爬取失败:', e.message);
