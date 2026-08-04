@@ -574,6 +574,128 @@ app.post('/api/sync-tags', async (req, res) => {
   }
 });
 
+// 关键词并行同步：多个关键词同时执行，每个独立管理状态/进度/错误。
+// 每个关键词每次最多抓取 50 条，自动跳过已抓取数据，支持增量翻页。
+// 进度文件 output/keyword-progress.json 记录每个关键词已抓取到的页码。
+// 注意：crawl() 内部会读-改-写 index.json，多个关键词并行会导致竞态，
+// 故用互斥锁串行化 crawl 调用，网络抓取阶段仍可重叠（crawl 内部并发拉取详情页）。
+const KW_PROGRESS_PATH = path.join(OUT_DIR, 'keyword-progress.json');
+
+function loadKeywordProgress() {
+  try {
+    return JSON.parse(fs.readFileSync(KW_PROGRESS_PATH, 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveKeywordProgress(progress) {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  fs.writeFileSync(KW_PROGRESS_PATH, JSON.stringify(progress, null, 2), 'utf8');
+}
+
+// 简单异步互斥锁：串行化对 index.json 的读-改-写操作
+let _indexMutex = Promise.resolve();
+function withIndexLock(task) {
+  const run = _indexMutex.then(() => task());
+  _indexMutex = run.catch(() => {});
+  return run;
+}
+
+app.post('/api/sync-keywords', async (req, res) => {
+  const keywords = (req.body && req.body.keywords) || [];
+  if (!Array.isArray(keywords) || keywords.length === 0) {
+    return res.status(400).json({ error: 'keywords array required' });
+  }
+
+  // 加载进度（keyword -> lastPage）
+  const progress = loadKeywordProgress();
+  const logs = [`开始关键词同步: ${keywords.length} 个关键词`];
+  const baselineCount = getIndex().length;
+
+  // 串行执行每个关键词的 crawl（避免 index.json 竞态），
+  // 但每个关键词独立处理错误，单个失败不影响后续
+  const keywordResults = [];
+  for (const kw of keywords) {
+    const kwLogs = [`[${kw}] 开始搜索...`];
+
+    // 计算下一页（增量同步）
+    const lastPage = progress[kw] || 0;
+    const nextPage = lastPage + 1;
+
+    try {
+      // 用互斥锁保护 crawl 对 index.json 的读-改-写
+      const result = await withIndexLock(() => crawl({
+        search: kw,
+        searchPages: 1,
+        searchPageStart: nextPage,
+        replace: false,
+        limit: 50,
+        outDir: OUT_DIR,
+        jsonPath: JSON_PATH,
+        concurrency: 3,
+        onLog: (m) => kwLogs.push(m),
+      }));
+
+      const crawled = result.crawled || 0;
+      const added = result.added || 0;
+      const exhausted = crawled === 0;
+
+      // 仅当抓取到数据时才推进页码（耗尽时保持当前页，避免空翻页）
+      if (!exhausted) {
+        progress[kw] = nextPage;
+      }
+
+      kwLogs.push(`[${kw}] 完成: 抓取 ${crawled} 条, 新增 ${added} 条${exhausted ? ' (已耗尽)' : ''}`);
+
+      keywordResults.push({
+        keyword: kw,
+        added,
+        total: result.total || 0,
+        crawled,
+        exhausted,
+        page: exhausted ? lastPage : nextPage,
+        error: null,
+        logs: kwLogs,
+      });
+    } catch (err) {
+      kwLogs.push(`[${kw}] 失败: ${err.message}`);
+      keywordResults.push({
+        keyword: kw,
+        added: 0,
+        total: 0,
+        crawled: 0,
+        exhausted: false,
+        page: lastPage,
+        error: err.message,
+        logs: kwLogs,
+      });
+    }
+  }
+
+  // 保存进度
+  saveKeywordProgress(progress);
+
+  // 刷新索引缓存
+  bustIndexCache();
+  const currentIndex = getIndex();
+  const totalAdded = currentIndex.length - baselineCount;
+
+  // 汇总日志
+  for (const kr of keywordResults) {
+    logs.push(...kr.logs);
+  }
+  logs.push(`关键词同步完成: 共新增 ${totalAdded} 条，索引总计 ${currentIndex.length} 条`);
+
+  res.json({
+    ok: true,
+    results: keywordResults,
+    totalAdded,
+    total: currentIndex.length,
+    logs,
+  });
+});
+
 // Crawl list pages (for the "crawl more" button).
 app.post('/api/crawl', async (req, res) => {
   const pageStart = parseInt(req.body && req.body.pageStart, 10) || 1;

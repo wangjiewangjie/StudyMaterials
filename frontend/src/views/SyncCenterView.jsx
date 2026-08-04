@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
-import { Empty, Row, Col, Button, Table, Tag, Badge } from 'antd';
+import { useMemo, useState } from 'react';
+import { Empty, Row, Col, Button, Table, Tag, Badge, Input } from 'antd';
 import {
   SyncOutlined, PlayCircleFilled, DatabaseOutlined, VideoCameraOutlined,
   ClockCircleOutlined, WarningOutlined, ExclamationCircleOutlined,
-  ArrowUpOutlined, PlusOutlined,
+  ArrowUpOutlined, PlusOutlined, SearchOutlined, CheckCircleOutlined,
+  CloseCircleOutlined, LoadingOutlined,
 } from '@ant-design/icons';
 import { formatDate } from '../services/api.js';
 
@@ -38,7 +39,7 @@ const STAT_GUTTER = [12, 16];
 const SRC_RESPONSIVE = { xs: 24, md: 12, lg: 8 };
 const SRC_GUTTER = [12, 16];
 
-// 同步中心视图：横幅 + 4 张统计卡 + 只读提示 + 数据源节点 + 日志表。
+// 同步中心视图：横幅 + 4 张统计卡 + 只读提示 + 数据源节点 + 关键词同步 + 日志表。
 export default function SyncCenterView({
   sites,
   siteCounts,
@@ -47,7 +48,15 @@ export default function SyncCenterView({
   lastSyncAt,
   syncing,
   onTriggerSync,
+  // 关键词同步
+  keywordSyncing,
+  keywordResults,
+  onStartKeywordSync,
+  onCancelKeywordSync,
 }) {
+  // 关键词输入框文本
+  const [keywords, setKeywords] = useState('');
+
   // 数据源节点卡片：在线状态全显在线，计数取自 siteCounts
   const sourceCards = useMemo(() => {
     return (sites || [])
@@ -264,6 +273,107 @@ export default function SyncCenterView({
               </Col>
             ))}
           </Row>
+        )}
+      </section>
+
+      {/* 关键词同步 */}
+      <section className="space-y-4 bg-[#0A0A0A] border border-white/5 rounded-lg p-4 sm:p-5">
+        <div className="flex items-center justify-between pb-1">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2.5">
+            <span className="w-1 h-5 bg-[#FF9900] rounded-lg inline-block" />
+            <SearchOutlined className="text-[#FF9900]" style={{ fontSize: 18 }} />
+            <span>关键词同步</span>
+          </h2>
+          <span className="text-[10px] text-gray-500 font-bold">
+            单次最多 50 条 · 增量翻页
+          </span>
+        </div>
+        <p className="text-[11px] text-gray-400 leading-relaxed m-0 -mt-2">
+          支持输入多个关键词，使用逗号分隔；每个关键词作为独立任务并行执行，互不影响。
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2.5">
+          <Input
+            placeholder="输入关键词，多个关键词用逗号分隔，例：关键词1,关键词2,关键词3"
+            value={keywords}
+            onChange={(e) => setKeywords(e.target.value)}
+            disabled={keywordSyncing || syncing}
+            allowClear
+            className="!bg-[#121212] !border-white/10 !text-white !rounded-lg flex-1"
+            onPressEnter={() => {
+              if (!keywordSyncing && !syncing && keywords.trim()) {
+                onStartKeywordSync(keywords);
+              }
+            }}
+          />
+          <Button
+            type="primary"
+            onClick={() => onStartKeywordSync(keywords)}
+            disabled={keywordSyncing || syncing || !keywords.trim()}
+            loading={keywordSyncing}
+            icon={!keywordSyncing ? <PlusOutlined /> : undefined}
+            className="!bg-[#FF9900] hover:!bg-[#ffaa22] !text-black !font-black !border-0 !rounded-lg !px-5 !h-9 shrink-0"
+          >
+            {keywordSyncing ? '同步中…' : '开始同步'}
+          </Button>
+          {keywordSyncing && (
+            <Button
+              danger
+              onClick={onCancelKeywordSync}
+              icon={<CloseCircleOutlined />}
+              className="!bg-red-500/10 hover:!bg-red-500/20 !text-red-400 !border !border-red-500/30 !rounded-lg !px-4 !h-9 shrink-0"
+            >
+              取消
+            </Button>
+          )}
+        </div>
+
+        {/* 关键词同步结果 */}
+        {keywordResults.length > 0 && (
+          <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
+            <div className="text-xs font-bold text-gray-400">同步结果：</div>
+            <div className="flex flex-wrap gap-2">
+              {keywordResults.map((r) => {
+                const color = r.status === 'error' ? 'error'
+                  : r.status === 'canceled' ? 'default'
+                  : r.status === 'running' ? 'processing'
+                  : r.exhausted ? 'warning'
+                  : 'success';
+                const icon = r.status === 'running'
+                  ? <LoadingOutlined style={{ fontSize: 11 }} spin />
+                  : r.status === 'error'
+                    ? <CloseCircleOutlined style={{ fontSize: 11 }} />
+                    : r.status === 'canceled'
+                      ? <CloseCircleOutlined style={{ fontSize: 11 }} />
+                      : r.exhausted
+                        ? <CheckCircleOutlined style={{ fontSize: 11 }} />
+                        : <CheckCircleOutlined style={{ fontSize: 11 }} />;
+                const statusText = r.status === 'running' ? '进行中'
+                  : r.status === 'error' ? '失败'
+                  : r.status === 'canceled' ? '已取消'
+                  : r.exhausted ? '已抓完'
+                  : '完成';
+                return (
+                  <Tag
+                    key={r.keyword}
+                    color={color}
+                    className="!flex !items-center !gap-1.5 !px-2.5 !py-1 !m-0 !text-xs !font-bold !rounded-lg"
+                  >
+                    {icon}
+                    <span>{r.keyword}</span>
+                    <span className="text-[10px] opacity-80">{statusText}</span>
+                    {r.added > 0 && (
+                      <span className="text-[10px] tabular-nums">+{r.added}</span>
+                    )}
+                    {r.error && (
+                      <span className="text-[10px] opacity-70 truncate max-w-[160px]" title={r.error}>
+                        {r.error}
+                      </span>
+                    )}
+                  </Tag>
+                );
+              })}
+            </div>
+          </div>
         )}
       </section>
 

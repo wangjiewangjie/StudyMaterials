@@ -9,6 +9,15 @@ async function postJSON(url, body, signal) {
     body: JSON.stringify(body),
     signal,
   });
+  // 响应非 JSON 时（如后端未启动命中 SPA fallback 返回 index.html）给出清晰报错
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    const text = await res.text().catch(() => '');
+    const hint = text.startsWith('<!DOCTYPE') || text.startsWith('<html')
+      ? '后端服务未启动或路由不存在（收到 HTML）'
+      : `响应类型 ${ct || '未知'}`;
+    throw new Error(`请求失败 (${res.status}): ${hint}`);
+  }
   return res.json();
 }
 
@@ -62,6 +71,11 @@ export async function syncCrawl(pageStart = 1, pageEnd = 1, signal) {
 // 多标签并行同步（保留的逗号分隔多标签能力）
 export async function syncTags(tags, pages = 1, signal) {
   return postJSON('/api/sync-tags', { tags, pages }, signal);
+}
+
+// 关键词同步：多个关键词独立并行执行，每个最多 50 条，支持增量翻页
+export async function syncKeywords(keywords, signal) {
+  return postJSON('/api/sync-keywords', { keywords }, signal);
 }
 
 // 刷新单条视频的 m3u8 地址（auth_key 会过期）+ 标签/分类

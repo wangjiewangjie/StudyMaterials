@@ -51,6 +51,9 @@ export default function App() {
   const {
     syncing, syncLogs, status, progress, elapsed, syncStats,
     syncHistory, lastSyncAt, startSync, cancelSync,
+    // 关键词同步
+    keywordSyncing, keywordResults,
+    startKeywordSync, cancelKeywordSync,
   } = useSync(message, handleSyncDone);
 
   // 监听窗口尺寸变化，切换移动端布局
@@ -229,6 +232,11 @@ export default function App() {
           lastSyncAt={lastSyncAt}
           syncing={syncing}
           onTriggerSync={handleStartSync}
+          // 关键词同步
+          keywordSyncing={keywordSyncing}
+          keywordResults={keywordResults}
+          onStartKeywordSync={startKeywordSync}
+          onCancelKeywordSync={cancelKeywordSync}
         />
       )}
 

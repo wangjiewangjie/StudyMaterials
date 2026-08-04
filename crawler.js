@@ -711,6 +711,7 @@ function filterArticlesByModifiedDate(articles, log) {
 //   pageStart, pageEnd   list page range (default 1..1)
 //   search               search keyword (overrides pages)
 //   searchPages          how many search result pages (default 1)
+//   searchPageStart      search starting page (default 1, for incremental keyword sync)
 //   todayOnly            startup mode: only 今日 per site (+ per-site fallback), no list pages
 //   minPerSite           minimum articles per site (overrides todayOnly list fetching)
 //   replace              replace index.json entirely (default: true when todayOnly or minPerSite)
@@ -724,6 +725,7 @@ async function crawl(opts = {}) {
   const pageEnd = opts.pageEnd || opts.pageStart || 1;
   const searchKeyword = opts.search || null;
   const searchPages = opts.searchPages || 1;
+  const searchPageStart = opts.searchPageStart || 1;
   const todayOnly = !!opts.todayOnly;
   const minPerSite = opts.minPerSite || 0;
   // Startup modes (todayOnly/minPerSite) replace; UI sync merges/pushes unless replace:true.
@@ -771,7 +773,7 @@ async function crawl(opts = {}) {
   if (!todayOnly && minPerSite === 0) {
     const totalPages = searchKeyword ? searchPages : (pageEnd - pageStart + 1);
     for (let i = 0; i < totalPages; i++) {
-      const pageNum = searchKeyword ? (i + 1) : (pageStart + i);
+      const pageNum = searchKeyword ? (searchPageStart + i) : (pageStart + i);
       const arts = await fetchListPageFromAllSites(pageNum, log, mode);
       for (const a of arts) addUnique(a);
       if (i < totalPages - 1) await sleep(150);
@@ -792,7 +794,7 @@ async function crawl(opts = {}) {
     // (e.g. all sites temporarily unreachable or all titles excluded).
     const existing = loadIndex(jsonPath);
     log('No articles found, nothing to do.');
-    return { added: 0, total: existing.length };
+    return { added: 0, total: existing.length, crawled: 0 };
   }
 
   // 2. Fetch detail pages -> extract video URLs + tags + category + real cover
@@ -839,14 +841,14 @@ async function crawl(opts = {}) {
   if (newArticles.length === 0) {
     const existing = loadIndex(jsonPath);
     log('No articles left after filters, keeping existing index.');
-    return { added: 0, total: existing.length, updated: 0 };
+    return { added: 0, total: existing.length, updated: 0, crawled: 0 };
   }
 
   if (replace) {
     saveIndex(jsonPath, newArticles);
     const withVideo = newArticles.filter((a) => a.video && a.video.url).length;
     log(`Done (replace). Total ${newArticles.length} articles | ${withVideo} with video URL`);
-    return { added: newArticles.length, total: newArticles.length, updated: 0 };
+    return { added: newArticles.length, total: newArticles.length, updated: 0, crawled: newArticles.length };
   }
 
   const existing = loadIndex(jsonPath);
@@ -854,7 +856,7 @@ async function crawl(opts = {}) {
   saveIndex(jsonPath, merged);
   const withVideo = merged.filter((a) => a.video && a.video.url).length;
   log(`Done (merge). +${added} new, ~${updated} updated | total ${merged.length} | ${withVideo} with video URL`);
-  return { added, total: merged.length, updated };
+  return { added, total: merged.length, updated, crawled: newArticles.length };
 }
 
 // ---------- CLI ----------
