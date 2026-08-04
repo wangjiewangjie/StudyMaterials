@@ -43,8 +43,7 @@ function SkeletonGrid({ count = 12 }) {
   );
 }
 
-// 首页视图：标签筛选 + 视频栅格。
-// 标签列表由服务端按规则生成（品牌过滤、>=5 显示、按视频数排序、>100 固定）。
+// 首页：标签筛选 + 视频栅格（标签规则由服务端 /api/tags 处理）
 export default function HomeView({
   items,
   favIds,

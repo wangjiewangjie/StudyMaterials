@@ -13,7 +13,7 @@ import { useAppData } from './hooks/useAppData.js';
 import { useSync } from './hooks/useSync.js';
 import { downloadFavorites } from './services/api.js';
 
-// 视图路由常量
+// 视图
 const VIEW = {
   HOME: 'home',
   DETAIL: 'detail',
@@ -21,7 +21,6 @@ const VIEW = {
   SYNC_CENTER: 'sync_center',
 };
 
-// 移动端断点阈值（与 Tailwind md 一致）
 const MOBILE_BREAKPOINT = 768;
 
 export default function App() {
@@ -37,13 +36,11 @@ export default function App() {
     typeof window !== 'undefined' ? window.innerWidth < MOBILE_BREAKPOINT : false
   );
 
-  // 共享数据 hook
   const {
     items, favorites, favIds, sites, siteCounts, tagList, loadingList,
     loadVideos, toggleFavorite, clearAllFavorites,
   } = useAppData(message);
 
-  // 同步 hook：完成时自动刷新视频列表
   const handleSyncDone = useCallback(() => {
     loadVideos(query.trim());
   }, [loadVideos, query]);
@@ -51,12 +48,10 @@ export default function App() {
   const {
     syncing, syncLogs, status, progress, elapsed, syncStats,
     syncHistory, lastSyncAt, startSync, cancelSync,
-    // 关键词同步
     keywordSyncing, keywordResults,
     startKeywordSync, cancelKeywordSync,
   } = useSync(message, handleSyncDone);
 
-  // 监听窗口尺寸变化，切换移动端布局
   useEffect(() => {
     const onResize = () => {
       const next = window.innerWidth < MOBILE_BREAKPOINT;
@@ -66,7 +61,6 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // 启动同步：打开 modal
   const handleStartSync = useCallback(() => {
     if (syncing) {
       setSyncModalOpen(true);
@@ -76,25 +70,21 @@ export default function App() {
     startSync({ type: 'crawl' });
   }, [syncing, startSync]);
 
-  // 关闭 modal：后台运行
   const handleSyncBackground = useCallback(() => {
     setSyncModalOpen(false);
   }, []);
 
-  // 取消同步
   const handleSyncCancel = useCallback(() => {
     cancelSync();
     setSyncModalOpen(false);
   }, [cancelSync]);
 
-  // 卡片点击 -> 进入详情
   const handleCardClick = useCallback((item) => {
     setSelected(item);
     setView(VIEW.DETAIL);
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
 
-  // 返回首页
   const handleHomeClick = useCallback(() => {
     setView(VIEW.HOME);
     setSelected(null);
@@ -104,7 +94,6 @@ export default function App() {
     setDrawerOpen(false);
   }, [loadVideos]);
 
-  // 切换收藏视图
   const handleFavoritesClick = useCallback(() => {
     if (view === VIEW.FAVORITES) {
       setView(VIEW.HOME);
@@ -116,20 +105,17 @@ export default function App() {
     setDrawerOpen(false);
   }, [view]);
 
-  // 同步中心
   const handleSyncCenterClick = useCallback(() => {
     setView(VIEW.SYNC_CENTER);
     setSelected(null);
     setDrawerOpen(false);
   }, []);
 
-  // 详情页返回
   const handleBack = useCallback(() => {
     setView(VIEW.HOME);
     setSelected(null);
   }, []);
 
-  // 详情页点击标签 -> 回首页搜索
   const handleTagClick = useCallback((tag) => {
     setView(VIEW.HOME);
     setSelected(null);
@@ -137,23 +123,20 @@ export default function App() {
     message.info(`已切换到标签「${tag}」`);
   }, [message]);
 
-  // 本地搜索（首页）
   const handleSearch = useCallback(() => {
     setActiveTag('');
     loadVideos(query.trim());
   }, [query, loadVideos]);
 
-  // 清空收藏
   const handleClearAll = useCallback(() => {
     clearAllFavorites();
   }, [clearAllFavorites]);
 
-  // 导出收藏
   const handleExport = useCallback(() => {
     downloadFavorites('json');
   }, []);
 
-  // 同步完成且 modal 仍打开 -> 自动关闭
+  // 同步完成后自动关闭弹窗
   useEffect(() => {
     if (!syncing && syncModalOpen && progress >= 100) {
       const t = setTimeout(() => setSyncModalOpen(false), 1200);

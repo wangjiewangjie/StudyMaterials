@@ -3,7 +3,8 @@ import {
   fetchVideos, fetchFavorites, addFavorite, removeFavorite, fetchSites, fetchTags,
 } from '../services/api.js';
 
-// 视频与收藏与站点的统一数据 hook，供 App 与各页面共享。
+// 视频 / 收藏 / 站点 / 标签数据 hook
+
 export function useAppData(message) {
   const [items, setItems] = useState([]);
   const [favorites, setFavorites] = useState([]);

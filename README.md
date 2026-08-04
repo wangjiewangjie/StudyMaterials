@@ -1,80 +1,139 @@
 # 学习资料
 
-Node.js 爬虫 + 本地视频库 Web UI —— 爬取多站点文章元数据与 m3u8 视频地址，提供本地搜索、统一「同步资料」（关键词搜索 / 列表抓取）与 HLS 在线播放。站点配置动态可调，无需改代码即可在页面上增删源站。
+本地视频资料库：自动从多个源站抓取内容，在浏览器里搜索、播放、收藏。数据都存在你自己的电脑上。
 
-## 功能特性
+## 能做什么
 
-- **动态多站点配置**：站点清单存于 `output/sites.json`，通过 `/api/sites` 接口在页面上增删改后即时生效，爬虫每次抓取前自动重载
-- **多站点并行爬取**：同时爬取所有启用站点（91吃瓜 / 51fans / 51爆料 / 51吃瓜 / 黑料网 / 黑料不打烊），自动按 ID 去重
-- **主题自适应解析**：自动识别 post-card 与 xqbj-list 两种列表主题；归档详情页同时支持 `/archives/ID/` 与 `/archives/ID.html`（如黑料不打烊）两种 URL 格式
-- **今日优先**：列表爬取先抓各站点「今日」分类；**按站点独立**判断，某站今日为空则回退该站列表第 1 页（前一日）；启动爬取按 `dateModified` 过滤当日/前一日
-- **视频地址解析**：从详情页 `.dplayer` 的 `data-config` 中提取真实 m3u8 URL（直链或需二次解析的 player 接口）
-- **日期抓取**：从详情页 `<meta itemprop="datePublished">` 或 JSON-LD 中解析发布日期
-- **内容过滤**：标题或标签含「重口味」「ai」的文章自动筛除
-- **索引写入**：服务启动爬取会**整库替换** `index.json`；界面「同步资料」则 **push 合并**（新条目置顶、同 ID 更新、旧条目保留）
-- **本地搜索 / 在线搜索**：按标题或 ID 过滤已爬取记录；有关键词则全网搜索同步
-- **收藏**：独立 `output/favorites.json`，同步/爬取不会清空；支持下载 JSON / m3u8 列表
-- **HLS 在线播放**：基于 hls.js + 自定义 ProxyLoader，通过 CORS 代理播放带 AES-128 加密、带时效 auth_key 的 m3u8
-- **URL 刷新**：播放前自动调用 `/api/refresh/:id` 重新抓取详情页，获取未过期的 m3u8 地址
-- **封面按需解密**：封面不落盘，通过 `/api/cover/:id` 实时抓取并内存解密后返回（源站封面为 AES 加密，通过源站 `zzz.js` 在 VM 沙箱中解密）
-- **自定义播放器**：自绘控制栏（进度条/缓冲条/音量/倍速/全屏）、键盘快捷键、记忆播放进度
-- **深色主题 UI**：金色渐变点缀、毛玻璃头部、卡片悬停动效、响应式布局
+- 打开网页浏览已抓取的视频，点标签或搜索筛选
+- 在线播放（支持加密 m3u8），自动续播进度
+- 一键同步最新内容；也可用关键词按需搜索同步
+- 收藏喜欢的条目（同步不会清空收藏）
+- 在页面里增删、启用/禁用源站，无需改代码
 
-## 项目结构
+---
 
-```
-StudyMaterials/
-├── server.js              # Express 服务器：API + CORS 代理 + 静态资源
-├── crawler.js             # 爬虫主模块（crawl / parseDetailPage / 站点配置加载）
-├── image-decrypt.js       # 源站 AES 加密封面解密（VM 沙箱加载 zzz.js）
-├── lib/
-│   └── hls-url.js         # HLS URL 规范化（剥离 CDN / 本地 proxy 层）
-├── scripts/
-│   ├── install-frontend.js
-│   ├── probe-91sp-deep.js
-│   ├── probe-91sp-player.js
-│   └── probe-playback.js
-├── package.json           # 后端依赖与脚本
-├── output/
-│   ├── sites.json         # 站点配置（动态加载，页面可改）
-│   └── index.json         # 文章元数据索引
-├── public/
-│   └── build/             # React 构建产物（由 Express 静态托管，已预构建）
-└── frontend/              # React + Vite 前端源码
-    ├── src/
-    │   ├── App.jsx        #   主组件（列表 / 搜索 / 爬取面板 / 播放弹窗）
-    │   ├── VideoPlayer.jsx#   自定义 HLS 播放器
-    │   ├── index.css
-    │   └── main.jsx
-    ├── vite.config.js     #   构建输出到 ../public/build，开发代理 /api /proxy
-    └── package.json
-```
+## 第一次使用（按顺序做）
 
-## 环境要求
+下面以 **Windows** 为主说明。Mac / Linux 命令类似，差异会单独标出。
 
-- **Node.js** ≥ 16（推荐 18+）
+### 第 1 步：安装 Node.js
 
-## 快速开始
+本软件需要 Node.js 才能运行（推荐 **18 或更高**，最低 16）。
 
-仓库已带预构建的前端（`public/build/`），克隆后两条命令即可运行：
+1. 打开官网：https://nodejs.org/
+2. 下载 **LTS（长期支持版）** 安装包并双击安装
+3. 安装时一路「下一步」即可（保持默认勾选「Add to PATH」）
+4. 装好后验证：按 `Win + R`，输入 `cmd` 回车，在黑色窗口里输入：
 
 ```bash
-npm install      # 安装后端依赖；postinstall 会自动装好前端依赖
-npm start        # 启动服务器，打开 http://localhost:3000
+node -v
+npm -v
 ```
 
-> `npm install` 触发的 `postinstall` 会在 `frontend/` 下自动执行一次依赖安装，因此无需手动进入该目录。若前端安装失败，可单独执行：`cd frontend && npm install`。
+若分别显示出类似 `v18.x.x` 和 `10.x.x` 的版本号，说明安装成功。
 
-启动成功会看到：
+> 若提示「不是内部或外部命令」，说明 Node 没装好或没进 PATH，请重新安装 Node.js 并重启电脑后再试。
+
+### 第 2 步：拿到本项目文件夹
+
+任选一种方式：
+
+**方式 A：用 Git 克隆（推荐）**
+
+```bash
+git clone https://github.com/wangjiewangjie/StudyMaterials.git
+cd StudyMaterials
+```
+
+**方式 B：下载压缩包**
+
+1. 在代码托管网站下载 ZIP
+2. 解压到任意目录，例如 `D:\StudyMaterials`
+3. 打开该文件夹
+
+### 第 3 步：打开命令行并进入项目目录
+
+1. 在项目文件夹空白处，按住 `Shift` 再右键
+2. 选择「在此处打开 PowerShell 窗口」或「打开终端」
+3. 确认当前路径就是项目根目录（能看到 `package.json`、`server.js`）
+
+也可手动进入：
+
+```bash
+cd D:\StudyMaterials
+```
+
+（请改成你自己的实际路径。）
+
+### 第 4 步：安装依赖
+
+在项目根目录执行：
+
+```bash
+npm install
+```
+
+这一步会：
+
+1. 安装后端依赖  
+2. **自动**再安装前端依赖（不必手动进入 `frontend` 文件夹）
+
+第一次可能要几分钟，请耐心等待。看到命令重新出现、没有红色报错，即表示成功。
+
+若前端依赖自动安装失败，可手动执行：
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+### 第 5 步：启动服务
+
+仍在项目根目录执行：
+
+```bash
+npm start
+```
+
+成功后终端会出现类似信息：
 
 ```
 学习资料 - 服务器已启动: http://localhost:3000
 已加载 N 条记录
 ```
 
-服务器启动时会自动后台爬取各启用站点「今日」内容并保证每站至少 50 条（`minPerSite`），整库替换 `index.json`；若某站今日为空，则单独回退抓取该站列表第 1 页（前一日）。
+启动后会在后台自动抓取内容，稍等片刻再刷新页面即可看到资料。
 
-### 修改端口
+### 第 6 步：打开网页
+
+1. 打开浏览器（Chrome / Edge 均可）
+2. 地址栏输入：http://localhost:3000
+3. 回车进入
+
+同一局域网内的手机/其他电脑，可用终端里打印的局域网地址访问（例如 `http://192.168.x.x:3000`）。
+
+### 第 7 步：停止服务
+
+在运行 `npm start` 的那个窗口里按 `Ctrl + C`，即可停止。下次使用重复「第 5、6 步」即可。
+
+---
+
+## 日常怎么用
+
+| 你想做的事 | 操作 |
+|------------|------|
+| 看视频 | 首页点卡片进入详情，点播放 |
+| 按标签筛选 | 点顶部标签栏 |
+| 搜索本地已有内容 | 顶部搜索框输入标题关键词 |
+| 同步最新 | 点右上角「同步」 |
+| 按关键词抓取 | 进入「同步中心」，输入关键词同步 |
+| 收藏 | 卡片或详情页点星标 |
+| 管理源站 | 同步中心里编辑站点（改地址、启用/禁用） |
+
+### 换一个端口启动
+
+默认是 `3000`。若被占用，程序会自动换端口；也可手动指定：
 
 ```bash
 # Windows PowerShell
@@ -87,166 +146,114 @@ set PORT=8080 && npm start
 PORT=8080 npm start
 ```
 
-### 重新构建前端
+然后浏览器打开对应端口，例如 http://localhost:8080 。
 
-当修改了 `frontend/` 下的源码后，重新构建一次即可（依赖已由 `npm install` 装好）：
+---
+
+## 改了前端代码之后
+
+仓库里已带好构建结果，普通使用**不用**再构建。
+
+只有你修改了 `frontend/` 里的界面代码时，才需要：
 
 ```bash
-npm run build     # 等价于在 frontend/ 下执行 vite build，输出到 public/build/
+npm run build
 ```
 
-### 开发模式（前端热更新）
+然后再 `npm start`。
 
-需要两个终端：
+### 开发时热更新（可选）
+
+需要开两个终端窗口：
 
 ```bash
-# 终端 1：后端 API 服务器
+# 窗口 1：后端
 npm start
 
-# 终端 2：Vite 前端开发服务器
-npm run dev       # 启动在 http://localhost:5173，已配置 /api /proxy 代理到 :3000
+# 窗口 2：前端开发服务
+npm run dev
 ```
 
-## npm 脚本一览
+浏览器打开 http://localhost:5173 （已自动把接口代理到后端）。
 
-| 命令 | 说明 |
-|------|------|
-| `npm install` | 安装后端依赖，并自动安装前端依赖（postinstall） |
-| `npm start` | 启动 Express 服务器（托管 API + 静态前端），默认 :3000 |
-| `npm run build` | 重新构建前端到 `public/build/` |
-| `npm run dev` | 启动 Vite 前端开发服务器（热更新），默认 :5173 |
-| `npm run crawl -- [opts]` | 命令行运行爬虫，参数见下文 |
+---
 
-## 站点配置
+## 命令行爬取（可选）
 
-站点清单存于 `output/sites.json`，爬虫每次 `crawl` 前自动重载，支持页面（`/api/sites`）修改后即时生效。每条配置字段：
-
-| 字段 | 说明 | 默认值 |
-|------|------|--------|
-| `url` | 站点根 URL | 必填 |
-| `name` | 显示名（91吃瓜 / 51fans …） | `url` |
-| `todayPath` | 「今日」分类路径（如 `/category/zxcghl/`、`/order/today/`） | 空（无则直接抓列表第 1 页） |
-| `archiveSuffix` | 归档详情页 URL 后缀：`/`（`/archives/ID/`）或 `.html`（`/archives/ID.html`，如黑料不打烊） | `/` |
-| `enabled` | 是否启用（禁用站点不参与抓取） | `true` |
-
-当前内置站点：
-
-| 名称 | URL | 今日分类 | 归档格式 | 状态 |
-|------|-----|----------|----------|------|
-| 91吃瓜 | `https://armed.izbfsaxh.cc` | `/category/zxcghl/` | `/archives/ID/` | 启用 |
-| 91视频 | `https://d1ve8vvwughzqa.cloudfront.net` | `/category/jrxw1/` | `/archives/ID/` | 禁用（player 接口失效） |
-| 51fans | `https://breast.eiejvjgex.cc` | `/order/today/` | `/archives/ID/` | 启用 |
-| 51爆料 | `https://assert.pbtiodqn.cc` | `/category/jrbl/` | `/archives/ID/` | 启用 |
-| 51吃瓜 | `https://band.hkllewakv.cc` | `/category/wpcz/` | `/archives/ID/` | 启用 |
-| 黑料网 | `https://d6lvl8l2l26yp.cloudfront.net` | `/category/wpcz/` | `/archives/ID/` | 启用 |
-| 黑料不打烊 | `https://wiki.lgbtoexf.cc` | `/category/24hcg/` | `/archives/ID.html` | 启用 |
-
-> 源站域名经常更换。当某站失效时，在页面站点配置里替换 `url`（同主题站点通常 `todayPath` 不变）即可，无需改代码。封面解密用的 `zzz.js` 由各 post-card 源站同源提供（`/usr/plugins/tbxw/js/zzz.js`），`image-decrypt.js` 指向当前存活的 91吃瓜镜像。
-
-## 爬虫命令行用法
-
-`crawler.js` 可独立运行，无需启动服务器：
+不打开网页也能抓取：
 
 ```bash
-# 抓取第 1 页
+# 抓列表第 1 页
 npm run crawl -- --pages 1
 
-# 抓取第 1-5 页
+# 抓第 1～5 页
 npm run crawl -- --pages 1-5
 
-# 在线搜索关键词并抓取
-npm run crawl -- --search 探花 --search-pages 2
+# 按关键词搜索抓取
+npm run crawl -- --search 关键词 --search-pages 2
 
-# 限制最多处理 20 篇
+# 限制最多处理 20 条
 npm run crawl -- --pages 1-5 --limit 20
-
-# 指定输出目录和并发数
-npm run crawl -- --pages 1 --out ./output --concurrency 5
 ```
 
-**完整参数：**
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
+| 参数 | 含义 | 默认 |
+|------|------|------|
 | `--pages <N\|N-M>` | 列表页范围 | `1` |
-| `--search <keyword>` | 搜索关键词（覆盖 `--pages`） | - |
+| `--search <关键词>` | 搜索模式 | 无 |
 | `--search-pages <N>` | 搜索结果页数 | `1` |
-| `--limit <N>` | 最多处理文章数（0=全部） | `0` |
-| `--out <dir>` | 输出目录 | `./output` |
-| `--concurrency <N>` | 详情页并发数 | `6` |
-| `--save-json <path>` | 元数据 JSON 路径 | `./output/index.json` |
+| `--limit <N>` | 最多处理条数（0=不限制） | `0` |
+| `--concurrency <N>` | 详情页并发 | `6` |
 
-## 播放器操作
+---
+
+## 站点配置说明
+
+站点保存在 `output/sites.json`，也可在页面「同步中心」里修改，保存后下次抓取立即生效。
+
+| 字段 | 含义 |
+|------|------|
+| `url` | 站点根地址（必填） |
+| `name` | 显示名称 |
+| `todayPath` | 「今日」分类路径；为空则直接抓列表第 1 页 |
+| `archiveSuffix` | 详情页后缀：`/` 或 `.html` |
+| `enabled` | 是否参与抓取 |
+
+源站域名常会更换：只需把失效站点的 `url` 改成新地址即可，一般不必改代码。
+
+---
+
+## 播放快捷键
 
 | 操作 | 方式 |
 |------|------|
-| 播放 / 暂停 | 点击视频，或 `空格` / `K` |
+| 播放 / 暂停 | 点击画面，或 `空格` / `K` |
 | 快退 / 快进 5 秒 | `←` / `→` |
-| 后退 / 前进 10 秒 | 控制栏 ⏪ / ⏩ 按钮 |
-| 音量 | `↑` / `↓`，或拖动音量条 |
-| 静音 | `M`，或点击音量图标 |
-| 倍速（0.5×~2×） | 控制栏倍速菜单 |
-| 全屏 | `F`，或双击视频，或点击 ⛶ |
-| 定位 | 拖动进度条（含缓冲指示） |
-| 续播 | 自动记忆每个视频进度，下次打开续播，播完自动清除 |
+| 音量 | `↑` / `↓` |
+| 静音 | `M` |
+| 全屏 | `F`，或双击画面 |
+| 续播 | 自动记住进度，播完清除 |
 
-## API 接口
+---
 
-服务器启动后提供以下接口：
+## 数据存在哪
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/videos` | 视频列表（可选 `?q=关键词` 本地搜索；仅返回有视频地址的） |
-| GET | `/api/sites` | 读取站点配置 |
-| POST | `/api/sites` | 保存站点配置（body：`{ sites: [...] }`，保存后即时生效） |
-| GET | `/api/favorites` | 收藏列表（独立 `favorites.json`，不受爬取清空影响） |
-| POST | `/api/favorites` | 加入收藏（body 含条目快照） |
-| DELETE | `/api/favorites/:id` | 取消收藏 |
-| GET | `/api/favorites/download` | 下载收藏（`?format=json` 或 `txt` / `m3u8`） |
-| GET | `/api/refresh/:id` | 刷新某文章的 m3u8 URL（重新抓取详情页获取未过期地址） |
-| GET | `/api/cover/:id` | 实时抓取并解密封面图，内存返回（不落盘） |
-| POST | `/api/search-online` | 在线搜索并爬取，body：`{ keyword, pages }` |
-| POST | `/api/sync-tags` | 批量按标签搜索同步，body：`{ tags, pages }` |
-| POST | `/api/crawl` | 爬取列表页，body：`{ pageStart, pageEnd }` |
-| GET | `/proxy/<enc-url>` | CORS 代理（m3u8 / TS / AES key），URL 需 encodeURIComponent |
-| GET | `/*` | SPA 兜底，返回 React `index.html` |
+都在项目下的 `output/` 目录（该目录不会提交到 Git）：
 
-## 数据格式
+| 文件 | 内容 |
+|------|------|
+| `index.json` | 已抓取的视频索引 |
+| `favorites.json` | 收藏（同步不会清空） |
+| `sites.json` | 站点配置 |
+| `fixed-tags.json` | 固定标签（关联视频很多时自动写入） |
 
-`output/index.json` 中每条记录字段：
+---
 
-```json
-{
-  "id": "111056",
-  "title": "文章标题",
-  "url": "https://armed.izbfsaxh.cc/archives/111056/",
-  "siteUrl": "https://armed.izbfsaxh.cc",
-  "coverUrl": "https://.../cover.jpeg",
-  "video": { "url": "https://.../index.m3u8?auth_key=...", "type": "hls" },
-  "tags": ["标签1", "标签2"],
-  "category": "分类名",
-  "datePublished": "2026-07-15"
-}
-```
+## 常用命令
 
-> 黑料不打烊等站点的 `url` 形如 `https://wiki.lgbtoexf.cc/archives/218652.html`（`.html` 后缀），由站点配置的 `archiveSuffix` 字段决定。
-
-## 常见问题
-
-**Q：视频播放失败，提示 keyLoadError / 403？**
-A：m3u8 URL 中的 `auth_key` 是有时效的。播放器会在播放前自动调用 `/api/refresh/:id` 重新获取最新地址。若仍失败，可能是源站对该视频已下线或更换了 CDN。
-
-**Q：封面不显示？**
-A：源站封面为 AES 加密，由 `image-decrypt.js` 通过源站 `zzz.js`（`/usr/plugins/tbxw/js/zzz.js`）在 VM 沙箱中解密。`image-decrypt.js` 顶部 `BASE_URL` 需指向一个存活的 post-card 源站；若该站宕机则所有加密封面无法解密，更换到另一存活站点即可。
-
-**Q：某站点抓不到内容 / 视频地址为空？**
-A：源站域名常更换或 player 接口偶尔失效。先在页面站点配置里把 `url` 替换为新地址（同主题站点 `todayPath` 通常不变）；若 player 接口对全部 cid 返回空（如旧 91视频），可临时把该站 `enabled` 设为 `false`。
-
-**Q：代理返回 502？**
-A：源站 CDN 要求 `Referer` 匹配目标 origin。代理已根据目标 URL 自动派生 Referer，如源站策略变更可能需要调整 `server.js` 中的 proxy 实现。
-
-**Q：端口被占用？**
-A：用 `PORT=新端口 npm start` 指定其他端口（服务器也会自动递增寻找可用端口）。开发模式下，`frontend/vite.config.js` 中的代理目标默认指向 `:3000`，若后端端口改了需同步修改。
-
-**Q：`npm install` 很慢或卡住？**
-A：postinstall 会再装一次前端依赖。如已装好可中断，直接 `npm start`；或用 `npm install --ignore-scripts` 跳过前端依赖，仅手动在 `frontend/` 下安装一次。
+| 命令 | 作用 |
+|------|------|
+| `npm install` | 安装依赖（含前端） |
+| `npm start` | 启动服务，浏览器打开提示的地址 |
+| `npm run build` | 重新打包前端 |
+| `npm run dev` | 前端开发热更新 |
+| `npm run crawl -- …` | 命令行爬取 |

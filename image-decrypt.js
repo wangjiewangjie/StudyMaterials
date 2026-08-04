@@ -1,12 +1,10 @@
-// image-decrypt.js — 解密封面图。
-// 源站封面经 AES 加密，浏览器侧靠 zzz.js 的 decryptImage 解密；
-// 本模块在 VM 沙箱中加载同款逻辑，对外提供 decryptBuffer()。
+// image-decrypt.js — 解密封面图（VM 沙箱加载源站 zzz.js 的 decryptImage）
 
 const vm = require('vm');
 const axios = require('axios');
 const CryptoJS = require('crypto-js');
 
-// zzz.js 由 post-card 源站提供；各站内容一致，换镜像只改 BASE_URL
+// zzz.js 各 post-card 站内容一致，换镜像只改 BASE_URL
 const BASE_URL = 'https://armed.izbfsaxh.cc';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 const ZZZ_URL = BASE_URL + '/usr/plugins/tbxw/js/zzz.js';

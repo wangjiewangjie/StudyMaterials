@@ -1,5 +1,4 @@
-// crawler.js — 多站点聚合爬虫。
-// 站点配置读自 output/sites.json（可在页面修改后即时生效）。
+// crawler.js — 多站点聚合爬虫。站点配置读自 output/sites.json（页面可改，即时生效）。
 //
 // 命令行：
 //   node crawler.js --pages 1-3
@@ -13,8 +12,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 
-// 站点配置：{ url, name, todayPath, enabled, archiveSuffix? }
-// archiveSuffix 默认 "/"（/archives/ID/），".html" 用于 /archives/ID.html
+// 站点项：{ url, name, todayPath, enabled, archiveSuffix? }；archiveSuffix 默认 "/"，部分站用 ".html"
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
 const DEFAULT_SITE_CONFIGS = [
   { url: 'https://armed.izbfsaxh.cc', name: '91吃瓜', todayPath: '/category/zxcghl/', enabled: true },
@@ -31,7 +29,7 @@ function loadSiteConfigs() {
     const raw = fs.readFileSync(SITES_PATH, 'utf8');
     const arr = JSON.parse(raw);
     if (Array.isArray(arr) && arr.length) return arr;
-  } catch (_) { /* fall through to defaults */ }
+  } catch (_) { /* 回退到默认配置 */ }
   return DEFAULT_SITE_CONFIGS.map((s) => ({ ...s }));
 }
 
@@ -40,16 +38,13 @@ function saveSiteConfigs(configs) {
   fs.writeFileSync(SITES_PATH, JSON.stringify(configs, null, 2), 'utf8');
 }
 
-// 当前生效配置（模块级缓存，reloadSites() 刷新）。
-// SITES / SITE_TODAY_PATH / SITE_ARCHIVE_SUFFIX / BASE_URL 用 let，便于 reloadSites
-// 重新赋值；模块内函数引用的是变量本身，reload 后下次调用自动用新值。
+// 模块级缓存；reloadSites() 后下次调用自动用新配置
 let SITE_CONFIGS = loadSiteConfigs();
 let SITES = [];
-let SITE_TODAY_PATH = {};   // url -> 今日分类路径
-let SITE_ARCHIVE_SUFFIX = {}; // url -> 归档详情页后缀（"/" 或 ".html"）
+let SITE_TODAY_PATH = {};
+let SITE_ARCHIVE_SUFFIX = {};
 let BASE_URL = '';
 
-// 从 SITE_CONFIGS 重建派生映射（init 与 reloadSites 共用，避免重复）。
 function rebuildSiteMaps() {
   const enabled = SITE_CONFIGS.filter((s) => s.enabled !== false);
   SITES = enabled.map((s) => s.url);
@@ -59,11 +54,10 @@ function rebuildSiteMaps() {
     if (s.todayPath) SITE_TODAY_PATH[s.url] = s.todayPath;
     SITE_ARCHIVE_SUFFIX[s.url] = s.archiveSuffix || '/';
   }
-  BASE_URL = SITES[0] || ''; // backwards compat（server.js 应优先用 getBaseUrl()）
+  BASE_URL = SITES[0] || '';
 }
 rebuildSiteMaps();
 
-// 重新加载站点配置（配置文件被外部修改后调用，例如页面保存）。
 function reloadSites() {
   SITE_CONFIGS = loadSiteConfigs();
   rebuildSiteMaps();
@@ -75,8 +69,7 @@ function getBaseUrl() { return BASE_URL; }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
-// Articles whose title or tags contain any of these keywords are excluded from
-// the index (case-insensitive substring match).
+// 标题或标签含这些关键词的条目不入库（不区分大小写）
 const EXCLUDE_KEYWORDS = ['重口味', 'ai'];
 const EXCLUDE_KW_LOWER = EXCLUDE_KEYWORDS.map((kw) => kw.toLowerCase());
 
@@ -93,8 +86,7 @@ function matchesExclude(article) {
   return false;
 }
 
-// In-place remove articles whose title or tags match EXCLUDE_KEYWORDS.
-// `label` is used in the log line (e.g. "title" / "tag").
+/** 原地剔除命中排除词的文章；label 仅用于日志 */
 function filterExcluded(articles, label, log) {
   const before = articles.length;
   for (let i = articles.length - 1; i >= 0; i--) {
@@ -105,8 +97,7 @@ function filterExcluded(articles, label, log) {
   return removed;
 }
 
-// Keep-alive agents: reuse TCP connections across requests to the same host.
-// Big win for crawl latency (no TLS handshake per request).
+// Keep-Alive：复用同主机 TCP，减少爬取握手开销
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
 
@@ -128,8 +119,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Extract article ID from any archive URL (site-agnostic). Matches both
-// "/archives/123/" and "/archives/123.html" (the latter used by wiki-style sites).
+/** 从归档 URL 提取文章 ID（兼容 /archives/123/ 与 /archives/123.html） */
 function normalizeArchiveUrl(href) {
   const m = href.match(/\/archives\/(\d+)(?:\.html)?\/?/);
   return m ? { id: m[1] } : null;
@@ -144,24 +134,20 @@ function listPageUrl(site, pageNum) {
   return pageNum <= 1 ? site + '/' : `${site}/page/${pageNum}/`;
 }
 
-// Per-site "今日" (today) entry path — the day's freshest content, used as the
-// priority source on every list-mode crawl. Each site exposes it under a
-// different route, so we map by site origin.（SITE_TODAY_PATH 由站点配置构建，见文件顶部）
+// 各站「今日」路径见 SITE_TODAY_PATH（由站点配置构建）
 function todayPageUrl(site, pageNum) {
   const p = SITE_TODAY_PATH[site];
   if (!p) return null;
   return pageNum <= 1 ? site + p : site + p.replace(/\/$/, '') + `/page/${pageNum}/`;
 }
 
-// China (UTC+8) calendar date as YYYY-MM-DD.
+/** 中国时区（UTC+8）日历日 YYYY-MM-DD */
 function chinaDateStr(offsetDays = 0) {
   const t = Date.now() + 8 * 3600000 + offsetDays * 86400000;
   return new Date(t).toISOString().slice(0, 10);
 }
 
-// Convert an article ISO timestamp to China calendar YYYY-MM-DD.
-// IMPORTANT: do NOT use the UTC date prefix of the string — 51fans JSON-LD uses
-// UTC (e.g. 2026-07-19T23:00:00+00:00 = 2026-07-20 07:00 in China).
+/** ISO 时间转中国日历日（勿直接取 UTC 日期前缀，跨日会错） */
 function articleDateStr(iso) {
   if (!iso) return null;
   const t = Date.parse(iso);
@@ -170,7 +156,7 @@ function articleDateStr(iso) {
   return m ? m[1] : null;
 }
 
-// Prefer datePublished (content day); fall back to dateModified.
+/** 优先 datePublished，其次 dateModified */
 function articleContentDateStr(article) {
   return articleDateStr(article.datePublished) || articleDateStr(article.dateModified);
 }
@@ -180,7 +166,7 @@ function searchUrl(site, keyword, pageNum) {
   return pageNum <= 1 ? `${site}/search/${enc}/` : `${site}/search/${enc}/page/${pageNum}/`;
 }
 
-// Per-request Referer matching the target site.
+/** 请求 Referer 与目标站同源 */
 function headersFor(site) {
   return { Referer: site + '/', Origin: site };
 }
@@ -212,7 +198,7 @@ function parsePagesArg(arg) {
   return [1, 1];
 }
 
-// ---------- list / search page parsing (polyglot: post-card + xqbj themes) ----------
+// ---------- 列表/搜索页解析（兼容 post-card / xqbj-list） ----------
 
 const COVER_BANNER_RE = /loadBannerDirect\s*\(\s*['"]([^'"]+)['"]/;
 const COVER_ATTR_RE = /https?:\/\/[^\s`"']+/;
@@ -267,7 +253,7 @@ function parseListPage(html, siteUrl) {
   return articles;
 }
 
-// ---------- detail page parsing (polyglot) ----------
+// ---------- 详情页解析 ----------
 
 const JSON_LD_PUB_RE = /"datePublished"\s*:\s*"([^"]+)"/;
 const JSON_LD_MOD_RE = /"dateModified"\s*:\s*"([^"]+)"/;
@@ -377,9 +363,7 @@ function parseDetailPage(html) {
   return result;
 }
 
-// Extract the m3u8 URL from a player-endpoint response. Two response shapes
-// exist across sites: {data:"<url>"} (string, ticket-flow sites) and
-// {data:[{url}]} (array, legacy d1ve-style).
+/** 从 player 接口响应提取 m3u8（兼容 data 为字符串或数组） */
 function extractPlayerUrl(resp) {
   const d = resp && resp.data;
   if (typeof d === 'string') return d;
@@ -387,13 +371,7 @@ function extractPlayerUrl(resp) {
   return (d && d.url) || null;
 }
 
-// Resolve a player endpoint URL to the real m3u8 URL.
-//   /action/player/get_play_url endpoints require a server-issued one-time
-//   ticket (per the site's artplayer-plugin-authentication): GET
-//   /action/player/ticket -> {data:{ticket}}, then POST get_play_url with
-//   {ticket, env}. The env fingerprint is only logged server-side, not enforced,
-//   so a minimal payload suffices. Other player endpoints are GET directly.
-//   Per-cid replay triggers "请求过于频繁" / "票据无效"; we retry once with backoff.
+/** 将 player 接口解析为真实 m3u8；get_play_url 需先取 ticket，失败时退避重试一次 */
 async function resolvePlayerUrl(siteUrl, playerPath, log) {
   const fullUrl = playerPath.startsWith('http') ? playerPath : siteUrl + playerPath;
   const headers = headersFor(siteUrl);
@@ -446,7 +424,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
   return null;
 }
 
-// ---------- concurrency runner (p-limit style: simple, no reject on first error) ----------
+// ---------- 并发池（单任务失败不中断整体） ----------
 
 async function mapWithConcurrency(items, limit, mapper) {
   if (!items.length) return [];
@@ -479,7 +457,7 @@ async function mapWithConcurrency(items, limit, mapper) {
   });
 }
 
-// ---------- index persistence ----------
+// ---------- 索引读写 ----------
 
 function loadIndex(jsonPath) {
   try {
@@ -494,8 +472,7 @@ function saveIndex(jsonPath, articles) {
   fs.writeFileSync(jsonPath, JSON.stringify(articles, null, 2), 'utf8');
 }
 
-// Merge crawled articles into existing index: new/updated items are pushed
-// to the front; older entries without a match are kept. Dedupes by id.
+/** 合并进索引：新/更新条目置顶，按 id 去重，旧条目保留 */
 function mergeIntoIndex(existing, incoming) {
   const existingMap = new Map(existing.map((a) => [a.id, a]));
   const incomingIds = new Set(incoming.map((a) => a.id));
@@ -510,9 +487,9 @@ function mergeIntoIndex(existing, incoming) {
   return { merged, added, updated: incoming.length - added };
 }
 
-// ---------- multi-site aggregated fetch ----------
+// ---------- 多站聚合抓取 ----------
 
-// Dedupe articles by id, preserving first-seen order.
+/** 按 id 去重，保留先出现的条目 */
 function dedupeById(articles) {
   const seen = new Set();
   const out = [];
@@ -522,9 +499,7 @@ function dedupeById(articles) {
   return out;
 }
 
-// Run an async task against every enabled site in parallel, then aggregate and
-// dedupe the returned article arrays. taskFn(site) does its own success logging
-// and returns an article array (or { articles }); rejections are logged here.
+/** 对所有启用站并行执行 taskFn，汇总并去重；失败只记日志 */
 async function mapAllSites(taskFn, log) {
   const results = await Promise.allSettled(SITES.map((site) => taskFn(site)));
   const aggregated = [];
@@ -540,7 +515,7 @@ async function mapAllSites(taskFn, log) {
   return dedupeById(aggregated);
 }
 
-// Fetch a list/search page from ALL sites in parallel, aggregate articles by ID.
+/** 并行抓取各站列表/搜索页并按 ID 聚合 */
 async function fetchListPageFromAllSites(pageNum, log, mode) {
   return mapAllSites(async (site) => {
     const url = mode.type === 'search' ? searchUrl(site, mode.keyword, pageNum) : listPageUrl(site, pageNum);
@@ -552,8 +527,7 @@ async function fetchListPageFromAllSites(pageNum, log, mode) {
   }, log);
 }
 
-// Fetch "今日" per site. Each site is handled independently: if its today
-// category returns zero articles, fall back to list page 1 (previous day).
+/** 各站独立抓「今日」；为空则回退该站列表第 1 页 */
 async function fetchTodayPerSiteWithFallback(log) {
   return mapAllSites(async (site) => {
     const articles = [];
@@ -597,9 +571,7 @@ async function fetchTodayPerSiteWithFallback(log) {
   }, log);
 }
 
-// Fetch list pages per site until each site has contributed at least minArticles.
-// If a site has fewer articles after maxPages, it will return whatever was found.
-// Sites that return 0 new articles or hit 404 are marked as exhausted and skipped.
+/** 按站翻页直到凑满 minArticles；无新增或 404 则标记耗尽 */
 async function fetchMinPerSite(minArticles, log, maxPages = 10) {
   const siteArticles = {};
   const siteIds = {};
@@ -682,8 +654,7 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
   return dedupeById(SITES.flatMap((site) => siteArticles[site]));
 }
 
-// Keep articles whose content date matches the list source (today vs fallback).
-// Uses China-local calendar day from datePublished (preferred) or dateModified.
+/** 按内容日期过滤：仅保留与列表来源日（今日/回退日）一致的条目 */
 function filterArticlesByModifiedDate(articles, log) {
   const today = chinaDateStr(0);
   const yesterday = chinaDateStr(-1);
@@ -701,21 +672,9 @@ function filterArticlesByModifiedDate(articles, log) {
   articles.forEach((a) => { delete a._listSource; });
 }
 
-// ---------- core crawl (module API) ----------
-
-// Options:
-//   pageStart, pageEnd   list page range (default 1..1)
-//   search               search keyword (overrides pages)
-//   searchPages          how many search result pages (default 1)
-//   searchPageStart      search starting page (default 1, for incremental keyword sync)
-//   todayOnly            startup mode: only 今日 per site (+ per-site fallback), no list pages
-//   minPerSite           minimum articles per site (overrides todayOnly list fetching)
-//   replace              replace index.json entirely (default: true when todayOnly or minPerSite)
-//   limit                max articles (default 0 = all)
-//   outDir               output directory
-//   concurrency         detail workers (default 6)
-//   jsonPath             index.json path
-//   onLog                progress callback (msg) => void
+// ---------- crawl 主流程 ----------
+// 选项：pageStart/pageEnd、search、searchPages、searchPageStart、todayOnly、
+// minPerSite、replace、limit、outDir、concurrency、jsonPath、onLog
 async function crawl(opts = {}) {
   const pageStart = opts.pageStart || 1;
   const pageEnd = opts.pageEnd || opts.pageStart || 1;
@@ -855,7 +814,7 @@ async function crawl(opts = {}) {
   return { added, total: merged.length, updated, crawled: newArticles.length };
 }
 
-// ---------- CLI ----------
+// ---------- 命令行入口 ----------
 
 function parseArgs(argv) {
   const args = {};

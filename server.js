@@ -114,7 +114,7 @@ function bustIndexCache() {
   indexMtimeMs = -1;
 }
 
-/** 根据当前索引生成展示标签，并将超阈值标签写入 fixed-tags.json */
+/** 生成展示标签，超阈值写入 fixed-tags.json */
 function refreshTagList() {
   return buildDisplayTags(getIndex(), getSiteConfigs(), {
     fixedPath: FIXED_TAGS_PATH,
@@ -122,7 +122,7 @@ function refreshTagList() {
   });
 }
 
-/** 索引落盘变更后：清缓存并刷新固定标签 */
+/** 索引变更后：清缓存并刷新标签 */
 function onIndexChanged() {
   bustIndexCache();
   return refreshTagList();
@@ -168,7 +168,7 @@ function toVideoItem(a) {
   };
 }
 
-/** Look up by id: index first (freshest crawl), then favorites (survives crawl wipe). */
+/** 按 id 查找：优先索引，其次收藏（收藏不被爬取清空） */
 function findById(id) {
   const index = getIndex();
   for (let i = 0; i < index.length; i++) {
@@ -190,13 +190,9 @@ function patchFavoriteById(id, patch) {
   return true;
 }
 
-// ---------- CORS proxy for HLS (m3u8 / TS / AES key) ----------
-// Browsers block cross-origin HLS requests, so we proxy through localhost.
-// CDNs require a Referer matching the target origin, otherwise 403.
-//
-// Do NOT decodeURIComponent(req.params[0]) again — Express already decodes the
-// path once. A second decode corrupts auth_key values that contain %XX sequences
-// (e.g. %3D / %2F), which yields 403 or wrong bytes and looks like "cannot decode".
+// ---------- HLS CORS 代理（m3u8 / TS / AES key） ----------
+// 浏览器跨域受限，经本机代理；CDN 需匹配目标 origin 的 Referer。
+// 注意：不要对 req.params[0] 再 decodeURIComponent（Express 已解码一次，二次解码会破坏 auth_key）。
 
 function proxyPathFor(absUrl) {
   return '/proxy/' + encodeURIComponent(normalizeUpstreamUrl(absUrl));
@@ -211,9 +207,7 @@ function resolvePlaylistUri(uri, playlistUrl) {
   }
 }
 
-// Rewrite m3u8 so relative segment / AES-key / child-playlist URIs become
-// same-origin /proxy/... paths. Needed for Safari native HLS (no custom loader)
-// and as a safety net when response.url restoration is missed.
+/** 把 m3u8 内相对分片/密钥地址改写为同源 /proxy/...（兼容 Safari 原生 HLS） */
 function rewriteM3u8(text, playlistUrl) {
   if (!text.includes('#EXTM3U')) return text;
   return text.split(/\r?\n/).map((line) => {
@@ -308,9 +302,9 @@ app.get('/proxy/*', async (req, res) => {
   }
 });
 
-// ---------- API ----------
+// ---------- API 路由 ----------
 
-// 站点配置：读取/保存。配置存于 output/sites.json，crawler 每次 crawl 前重载。
+// 站点配置（output/sites.json）
 app.get('/api/sites', (req, res) => {
   res.json({ sites: getSiteConfigs() });
 });
@@ -343,10 +337,7 @@ app.post('/api/sites', (req, res) => {
   }
 });
 
-// List all scraped items (optional ?q= for local search)
-// By default returns ALL crawled items so the user can see what was collected
-// from every site, even when the player endpoint is broken and the video URL
-// couldn't be resolved (e.g. d1ve/cloudfront mirror of 91sp91).
+// 视频列表（?q= 本地搜索；仅返回已有视频地址的条目）
 app.get('/api/videos', (req, res) => {
   const all = getIndex().filter((a) => a.video && a.video.url);
   const q = (req.query.q || '').trim().toLowerCase();
@@ -372,13 +363,8 @@ app.get('/api/tags', (req, res) => {
   }
 });
 
-// Serve a cover image by video ID.
-// Covers are NOT stored on disk: the server fetches the remote coverUrl, decrypts
-// it in memory (source serves AES-encrypted images), and streams the bytes to the
-// client. Nothing sensitive is ever written to the local filesystem.
-
-// Sniff image magic bytes in one pass — returns { valid, contentType }.
-// Replaces the former isValidImage() + imageContentType() pair.
+// 封面：远程抓取后内存解密再返回，不落盘
+/** 根据文件头判断图片类型 */
 function sniffImage(buf) {
   if (buf[0] === 0xFF && buf[1] === 0xD8) return { valid: true, contentType: 'image/jpeg' };
   if (buf[0] === 0x89 && buf[1] === 0x50) return { valid: true, contentType: 'image/png' };
@@ -387,8 +373,7 @@ function sniffImage(buf) {
   return { valid: false, contentType: 'application/octet-stream' };
 }
 
-// Referer origin for a fetched article: prefer its source site, else derive
-// from its archive URL, else fall back to the first configured site.
+/** 文章请求 Referer：优先 siteUrl，其次归档 URL origin */
 function refererFor(item) {
   return item.siteUrl || (item.url ? new URL(item.url).origin : getBaseUrl());
 }
@@ -405,7 +390,7 @@ app.get('/api/cover/:id', async (req, res) => {
     });
     let buf = Buffer.from(upstream.data);
     if (!sniffImage(buf).valid) {
-      // Source serves encrypted images; decrypt in memory only.
+      // 源站封面可能是 AES 加密，解密后返回
       buf = await decryptBuffer(buf);
     }
     res.set('Content-Type', sniffImage(buf).contentType);
@@ -417,9 +402,7 @@ app.get('/api/cover/:id', async (req, res) => {
   }
 });
 
-// Refresh a single video's m3u8 URL (stored URLs contain expiring auth_key).
-// Also refreshes tags/category since the detail page is re-fetched.
-// Works for items in index.json or favorites.json (favorites survive crawl wipe).
+// 刷新单条 m3u8（auth_key 会过期），并更新标签/分类
 app.get('/api/refresh/:id', async (req, res) => {
   const found = findById(req.params.id);
   if (!found) return res.status(404).json({ error: 'not found' });
@@ -486,14 +469,14 @@ app.get('/api/refresh/:id', async (req, res) => {
   }
 });
 
-// ---------- Favorites (separate from index.json; never wiped by crawl) ----------
+// ---------- 收藏（独立于 index，爬取不会清空） ----------
 
 app.get('/api/favorites', (req, res) => {
   const items = getFavorites().map(toVideoItem);
   res.json({ total: items.length, items, ids: items.map((a) => a.id) });
 });
 
-// Download favorites as JSON or a plain-text m3u8 list for external downloaders.
+// 下载收藏（json / txt / m3u8）
 app.get('/api/favorites/download', (req, res) => {
   const favs = getFavorites();
   const format = String(req.query.format || 'json').toLowerCase();
@@ -540,7 +523,7 @@ app.delete('/api/favorites/:id', (req, res) => {
   res.json({ ok: true, total: next.length });
 });
 
-// Online search: crawl /search/<keyword>/ and return matching results.
+// 在线搜索并入库
 app.post('/api/search-online', async (req, res) => {
   const keyword = (req.body && req.body.keyword) || '';
   if (!keyword) return res.status(400).json({ error: 'keyword required' });
@@ -569,7 +552,7 @@ app.post('/api/search-online', async (req, res) => {
   }
 });
 
-// Tag sync: crawl multiple tags sequentially, merge results into index.
+// 多标签顺序同步
 app.post('/api/sync-tags', async (req, res) => {
   const tags = (req.body && req.body.tags) || [];
   if (!Array.isArray(tags) || tags.length === 0) return res.status(400).json({ error: 'tags array required' });
@@ -617,11 +600,7 @@ app.post('/api/sync-tags', async (req, res) => {
   }
 });
 
-// 关键词并行同步：多个关键词同时执行，每个独立管理状态/进度/错误。
-// 每个关键词每次最多抓取 50 条，自动跳过已抓取数据，支持增量翻页。
-// 进度文件 output/keyword-progress.json 记录每个关键词已抓取到的页码。
-// 注意：crawl() 内部会读-改-写 index.json，多个关键词并行会导致竞态，
-// 故用互斥锁串行化 crawl 调用，网络抓取阶段仍可重叠（crawl 内部并发拉取详情页）。
+// 关键词同步：进度记在 keyword-progress.json；crawl 写索引用互斥锁串行化
 const KW_PROGRESS_PATH = path.join(OUT_DIR, 'keyword-progress.json');
 
 function loadKeywordProgress() {
@@ -739,7 +718,7 @@ app.post('/api/sync-keywords', async (req, res) => {
   });
 });
 
-// Crawl list pages (for the "crawl more" button).
+// 列表页爬取
 app.post('/api/crawl', async (req, res) => {
   const pageStart = parseInt(req.body && req.body.pageStart, 10) || 1;
   const pageEnd = parseInt(req.body && req.body.pageEnd, 10) || pageStart;
@@ -760,7 +739,7 @@ app.post('/api/crawl', async (req, res) => {
   }
 });
 
-// SPA fallback: serve React index.html for all non-API routes
+// SPA 兜底
 app.get('*', (req, res) => {
   res.sendFile(path.join(BUILD_DIR, 'index.html'));
 });
