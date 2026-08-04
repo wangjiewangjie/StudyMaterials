@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  fetchVideos, fetchFavorites, addFavorite, removeFavorite, fetchSites, hostnameOf,
+  fetchVideos, fetchFavorites, addFavorite, removeFavorite, fetchSites, fetchTags, hostnameOf,
 } from '../services/api.js';
 
 // 站点名称映射默认值，与 crawler.js 的 DEFAULT_SITE_CONFIGS 一致；
@@ -18,6 +18,7 @@ export function useAppData(message) {
   const [favorites, setFavorites] = useState([]);
   const [favIds, setFavIds] = useState(() => new Set());
   const [sites, setSites] = useState([]);
+  const [tagList, setTagList] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [lastQuery, setLastQuery] = useState('');
   const siteNameMapRef = useRef({ ...SITE_NAMES });
@@ -46,6 +47,16 @@ export function useAppData(message) {
     return siteNameMapRef.current[host] || host.split('.')[0];
   }, []);
 
+  // 加载展示标签（过滤/阈值/排序/固定由服务端处理）
+  const loadTags = useCallback(async () => {
+    try {
+      const data = await fetchTags();
+      setTagList(data.tags || []);
+    } catch (_) {
+      setTagList([]);
+    }
+  }, []);
+
   // 加载视频列表（q 为空则全部）
   const loadVideos = useCallback(async (q) => {
     setLoadingList(true);
@@ -53,13 +64,15 @@ export function useAppData(message) {
     try {
       const data = await fetchVideos(q);
       setItems(data.items || []);
+      // 列表变更后刷新标签（新同步可能触发固定）
+      loadTags();
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       if (message) message.error('加载失败：' + e.message);
     } finally {
       setLoadingList(false);
     }
-  }, [message]);
+  }, [message, loadTags]);
 
   // 加载收藏
   const loadFavorites = useCallback(async () => {
@@ -133,9 +146,9 @@ export function useAppData(message) {
   return {
     items, setItems,
     favorites, favIds,
-    sites, siteLabel, siteCounts,
+    sites, siteLabel, siteCounts, tagList,
     loadingList, lastQuery, setLastQuery,
-    loadVideos, loadFavorites, loadSites,
+    loadVideos, loadFavorites, loadSites, loadTags,
     toggleFavorite, clearAllFavorites,
   };
 }

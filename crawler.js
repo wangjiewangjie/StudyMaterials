@@ -18,6 +18,7 @@ const http = require('http');
 const https = require('https');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 
 // 站点配置：从 output/sites.json 动态加载，可在页面修改后即时生效。
 // 每个站点：{ url, name, todayPath, enabled, archiveSuffix? }
@@ -323,10 +324,11 @@ function parseDetailPage(html) {
     if (t) tagSet.add(t);
   });
 
-  // Category — breadcrumb first
+  // Category — breadcrumb first（站点品牌相关分类丢弃）
   const $crumb = $('p.sp_breadcrumb_nav a');
   if ($crumb.length >= 2) {
-    result.category = $crumb.eq(1).text().trim();
+    const cat = $crumb.eq(1).text().trim();
+    if (cat && !isSiteBrandTag(cat, SITE_CONFIGS)) result.category = cat;
   }
 
   // Video + tags + category from .dplayer[data-config]
@@ -348,8 +350,8 @@ function parseDetailPage(html) {
 
     // Category from data-video_type_name if breadcrumb found nothing
     if (!result.category) {
-      const cat = $div.attr('data-video_type_name');
-      if (cat) result.category = cat;
+      const cat = ($div.attr('data-video_type_name') || '').trim();
+      if (cat && !isSiteBrandTag(cat, SITE_CONFIGS)) result.category = cat;
     }
 
     // Video URL — two data-config shapes:
@@ -377,7 +379,8 @@ function parseDetailPage(html) {
     }
   });
 
-  result.tags = Array.from(tagSet);
+  // 生成时过滤站点名称/品牌相关标签
+  result.tags = filterSiteBrandTags(Array.from(tagSet), SITE_CONFIGS);
   return result;
 }
 
@@ -910,4 +913,5 @@ module.exports = {
   SITES, UA,
   loadSiteConfigs, saveSiteConfigs, reloadSites,
   getSiteConfigs, getSites, getBaseUrl,
+  filterSiteBrandTags, isSiteBrandTag,
 };

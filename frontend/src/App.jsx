@@ -39,7 +39,7 @@ export default function App() {
 
   // 共享数据 hook
   const {
-    items, favorites, favIds, sites, siteCounts, loadingList,
+    items, favorites, favIds, sites, siteCounts, tagList, loadingList,
     loadVideos, toggleFavorite, clearAllFavorites,
   } = useAppData(message);
 
@@ -186,6 +186,7 @@ export default function App() {
           items={items}
           favIds={favIds}
           sites={sites}
+          tagList={tagList}
           loadingList={loadingList}
           activeTag={activeTag}
           onTagChange={setActiveTag}

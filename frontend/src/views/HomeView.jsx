@@ -6,7 +6,6 @@ import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
 
 const { Text } = Typography;
 
-const TAG_COLLAPSED_COUNT = 12;
 const PAGE_SIZE = 60;
 
 // 栅格响应式配置：2 / 2 / 3 / 4 列
@@ -45,11 +44,12 @@ function SkeletonGrid({ count = 12 }) {
 }
 
 // 首页视图：标签筛选 + 视频栅格。
-// 桌面端展示顶部标签栏；移动端标签栏由 Drawer 提供，此处的筛选条隐藏。
+// 标签列表由服务端按规则生成（品牌过滤、>=5 显示、按视频数排序、>100 固定）。
 export default function HomeView({
   items,
   favIds,
   sites,
+  tagList = [],
   loadingList,
   activeTag,
   onTagChange,
@@ -59,19 +59,6 @@ export default function HomeView({
 }) {
   // 站点 url -> name 映射（用于卡片来源标签）
   const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
-
-  // 标签计数（按出现频次倒序）
-  const tagList = useMemo(() => {
-    const counts = new Map();
-    items.forEach((it) => {
-      if (it.category) counts.set(it.category, (counts.get(it.category) || 0) + 1);
-      (it.tags || []).forEach((t) => counts.set(t, (counts.get(t) || 0) + 1));
-    });
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 40)
-      .map(([tag, count]) => ({ tag, count }));
-  }, [items]);
 
   // 过滤 + 排序
   const filtered = useMemo(() => {
@@ -95,7 +82,7 @@ export default function HomeView({
 
   return (
     <>
-      {/* 标签筛选条：bilibili 风格横向滚动胶囊条（桌面+移动统一显示） */}
+      {/* 标签筛选条：仅展示服务端返回的有效标签 */}
       <div className="home-filter-bar fixed top-16 left-0 right-0 z-30 bg-[#0A0A0A]/95 backdrop-blur-xl border-b border-white/10 shadow-2xl shadow-black/80">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2">
           <div className="tag-scroll flex items-center gap-1.5 sm:gap-2 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [-ms-overflow-style:none]">
@@ -106,7 +93,7 @@ export default function HomeView({
             >
               全部
             </Tag.CheckableTag>
-            {tagList.slice(0, TAG_COLLAPSED_COUNT).map(({ tag }) => (
+            {tagList.map(({ tag }) => (
               <Tag.CheckableTag
                 key={tag}
                 checked={activeTag === tag}

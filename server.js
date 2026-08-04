@@ -14,6 +14,7 @@ const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
   loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getBaseUrl } = require('./crawler');
 const { decryptBuffer } = require('./image-decrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
+const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 3000;
 const PORT_FILE = path.join(__dirname, '.server-port');
@@ -36,6 +37,7 @@ function findAvailablePort(startPort) {
 const OUT_DIR = path.resolve(__dirname, 'output');
 const JSON_PATH = path.join(OUT_DIR, 'index.json');
 const FAV_PATH = path.join(OUT_DIR, 'favorites.json');
+const FIXED_TAGS_PATH = defaultFixedPath(OUT_DIR);
 const BUILD_DIR = path.join(__dirname, 'public', 'build');
 const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS, 10) || 90000;
 const REFRESH_TIMEOUT_MS = parseInt(process.env.REFRESH_TIMEOUT_MS, 10) || 60000;
@@ -98,6 +100,14 @@ function writeIndex(articles) {
 function bustIndexCache() {
   indexCache = null;
   indexMtimeMs = -1;
+}
+
+/** 根据当前索引生成展示标签，并将超阈值标签写入 fixed-tags.json */
+function refreshTagList() {
+  return buildDisplayTags(getIndex(), getSiteConfigs(), {
+    fixedPath: FIXED_TAGS_PATH,
+    persist: true,
+  });
 }
 
 function getFavorites() {
@@ -329,6 +339,21 @@ app.get('/api/videos', (req, res) => {
   res.json({ total: items.length, items });
 });
 
+// 展示用标签列表：过滤站点品牌、>=5 条才显示、按视频数排序；>100 条固定并持久化。
+app.get('/api/tags', (req, res) => {
+  try {
+    const { tags, fixedTags, newlyFixed } = refreshTagList();
+    res.json({
+      tags,
+      fixedTags,
+      newlyFixed,
+      total: tags.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Serve a cover image by video ID.
 // Covers are NOT stored on disk: the server fetches the remote coverUrl, decrypts
 // it in memory (source serves AES-encrypted images), and streams the bytes to the
@@ -514,6 +539,7 @@ app.post('/api/search-online', async (req, res) => {
     });
     // Crawl rewrote index.json; bust the mtime cache so getIndex reloads.
     bustIndexCache();
+    refreshTagList();
     const all = getIndex().filter((a) => a.video && a.video.url);
     const qlc = keyword.toLowerCase();
     const items = all
@@ -563,6 +589,7 @@ app.post('/api/sync-tags', async (req, res) => {
 
     // Load final result and calculate actual additions
     bustIndexCache();
+    refreshTagList();
     const currentIndex = loadIndex(JSON_PATH);
     const actualAdded = currentIndex.length - baselineCount;
     const withVideo = currentIndex.filter((a) => a.video && a.video.url).length;
@@ -676,8 +703,9 @@ app.post('/api/sync-keywords', async (req, res) => {
   // 保存进度
   saveKeywordProgress(progress);
 
-  // 刷新索引缓存
+  // 刷新索引缓存与固定标签
   bustIndexCache();
+  refreshTagList();
   const currentIndex = getIndex();
   const totalAdded = currentIndex.length - baselineCount;
 
@@ -711,6 +739,7 @@ app.post('/api/crawl', async (req, res) => {
       onLog: (m) => logs.push(m),
     });
     bustIndexCache();
+    refreshTagList();
     res.json({ ok: true, added: result.added, total: result.total, logs });
   } catch (err) {
     res.status(500).json({ error: err.message, logs });
@@ -746,6 +775,7 @@ app.get('*', (req, res) => {
           onLog: (m) => console.log(m),
         });
         bustIndexCache();
+        refreshTagList();
         console.log(`启动爬取完成，当前共 ${getIndex().length} 条记录`);
       } catch (e) {
         console.warn('启动爬取失败:', e.message);

@@ -84,6 +84,13 @@ export async function refreshVideo(id, signal) {
   return res.json();
 }
 
+// 获取展示用标签列表（服务端已过滤品牌、阈值筛选、排序与固定）
+export async function fetchTags(signal) {
+  const res = await fetch('/api/tags', { signal });
+  if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
+  return res.json();
+}
+
 // 站点主机名提取，用于卡片来源标签
 export function hostnameOf(siteUrl) {
   if (!siteUrl) return '';
