@@ -55,7 +55,6 @@ export default function HomeView({
   onTagChange,
   onCardClick,
   onToggleFavorite,
-  isMobile,
 }) {
   // 站点 url -> name 映射（用于卡片来源标签）
   const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);

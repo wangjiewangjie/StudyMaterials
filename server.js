@@ -1,14 +1,12 @@
-// server.js
-// Local web server: serves the React UI + APIs + CORS proxy for HLS streaming.
-//
-// Run:  node server.js            (default http://localhost:3000)
-//       set PORT=8080 && node server.js
-// 端口被占用时会自动递增切换，并将实际端口写入 .server-port 供前端读取
+// server.js — 本地 Web 服务：React 前端 + API + HLS CORS 代理。
+// 启动：node server.js（默认 http://localhost:3000）
+// 端口被占用时自动递增，实际端口写入 .server-port
 
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
+const os = require('os');
 const axios = require('axios');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
   loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getBaseUrl } = require('./crawler');
@@ -18,6 +16,20 @@ const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 3000;
 const PORT_FILE = path.join(__dirname, '.server-port');
+
+/** 本机局域网 IPv4（排除回环与内部虚拟网卡） */
+function getLocalIPv4() {
+  const nets = os.networkInterfaces();
+  const ips = [];
+  for (const list of Object.values(nets)) {
+    for (const netInfo of list || []) {
+      if (netInfo.family !== 'IPv4' && netInfo.family !== 4) continue;
+      if (netInfo.internal) continue;
+      ips.push(netInfo.address);
+    }
+  }
+  return ips;
+}
 
 function findAvailablePort(startPort) {
   return new Promise((resolve) => {
@@ -62,10 +74,10 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve React build
+// 托管前端构建产物
 app.use(express.static(BUILD_DIR));
 
-// In-memory index cache — avoids re-reading/parsing index.json on every request.
+// 索引内存缓存，避免每次请求都读盘解析
 let indexCache = null;
 let indexMtimeMs = -1;
 let favCache = null;
@@ -96,7 +108,7 @@ function writeIndex(articles) {
   }
 }
 
-// Force getIndex() to reload from disk on next call (after crawl rewrites index.json).
+// 爬虫改写 index.json 后调用，强制下次 getIndex 重新读盘
 function bustIndexCache() {
   indexCache = null;
   indexMtimeMs = -1;
@@ -108,6 +120,12 @@ function refreshTagList() {
     fixedPath: FIXED_TAGS_PATH,
     persist: true,
   });
+}
+
+/** 索引落盘变更后：清缓存并刷新固定标签 */
+function onIndexChanged() {
+  bustIndexCache();
+  return refreshTagList();
 }
 
 function getFavorites() {
@@ -538,8 +556,7 @@ app.post('/api/search-online', async (req, res) => {
       onLog: (m) => logs.push(m),
     });
     // Crawl rewrote index.json; bust the mtime cache so getIndex reloads.
-    bustIndexCache();
-    refreshTagList();
+    onIndexChanged();
     const all = getIndex().filter((a) => a.video && a.video.url);
     const qlc = keyword.toLowerCase();
     const items = all
@@ -588,9 +605,8 @@ app.post('/api/sync-tags', async (req, res) => {
     }
 
     // Load final result and calculate actual additions
-    bustIndexCache();
-    refreshTagList();
-    const currentIndex = loadIndex(JSON_PATH);
+    onIndexChanged();
+    const currentIndex = getIndex();
     const actualAdded = currentIndex.length - baselineCount;
     const withVideo = currentIndex.filter((a) => a.video && a.video.url).length;
     logs.push(`同步完成: +${actualAdded} 新增，共 ${currentIndex.length} 条 (${withVideo} 有视频)`);
@@ -704,8 +720,7 @@ app.post('/api/sync-keywords', async (req, res) => {
   saveKeywordProgress(progress);
 
   // 刷新索引缓存与固定标签
-  bustIndexCache();
-  refreshTagList();
+  onIndexChanged();
   const currentIndex = getIndex();
   const totalAdded = currentIndex.length - baselineCount;
 
@@ -738,8 +753,7 @@ app.post('/api/crawl', async (req, res) => {
       concurrency: 3,
       onLog: (m) => logs.push(m),
     });
-    bustIndexCache();
-    refreshTagList();
+    onIndexChanged();
     res.json({ ok: true, added: result.added, total: result.total, logs });
   } catch (err) {
     res.status(500).json({ error: err.message, logs });
@@ -755,30 +769,36 @@ app.get('*', (req, res) => {
   const port = await findAvailablePort(BASE_PORT);
   fs.writeFileSync(PORT_FILE, String(port));
 
-  app.listen(port, () => {
-    console.log(`学习资料 - 服务器已启动: http://localhost:${port}`);
-    if (port !== BASE_PORT) {
-      console.log(`端口 ${BASE_PORT} 已被占用，自动切换到 ${port}`);
+  app.listen(port, '0.0.0.0', () => {
+    const lanIps = getLocalIPv4();
+    console.log('');
+    console.log('  学习资料已启动');
+    console.log(`  本机  http://localhost:${port}`);
+    for (const ip of lanIps) {
+      console.log(`  局域网  http://${ip}:${port}`);
     }
-    console.log(`已加载 ${getIndex().length} 条记录，收藏 ${getFavorites().length} 条`);
+    if (port !== BASE_PORT) {
+      console.log(`  （端口 ${BASE_PORT} 占用，已改用 ${port}）`);
+    }
+    console.log(`  索引 ${getIndex().length} 条 · 收藏 ${getFavorites().length} 条`);
+    console.log('');
 
-    // Startup: crawl minimum 50 articles per site
+    // 启动后静默后台爬取，只打印起止摘要
     (async () => {
       try {
-        console.log('启动爬取：各站点最少50条...');
+        console.log('  后台同步中…');
         await crawl({
           minPerSite: 50,
           replace: true,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
           concurrency: 3,
-          onLog: (m) => console.log(m),
+          onLog: () => {},
         });
-        bustIndexCache();
-        refreshTagList();
-        console.log(`启动爬取完成，当前共 ${getIndex().length} 条记录`);
+        onIndexChanged();
+        console.log(`  同步完成，共 ${getIndex().length} 条\n`);
       } catch (e) {
-        console.warn('启动爬取失败:', e.message);
+        console.warn('  同步失败:', e.message);
       }
     })();
   });

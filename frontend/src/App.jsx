@@ -192,7 +192,6 @@ export default function App() {
           onTagChange={setActiveTag}
           onCardClick={handleCardClick}
           onToggleFavorite={toggleFavorite}
-          isMobile={isMobile}
         />
       )}
 

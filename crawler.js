@@ -1,16 +1,9 @@
-// crawler.js
-// Multi-site aggregated crawler for adult video content.
+// crawler.js — 多站点聚合爬虫。
+// 站点配置读自 output/sites.json（可在页面修改后即时生效）。
 //
-// 站点配置从 output/sites.json 动态加载（见 loadSiteConfigs），
-// 支持页面（/api/sites）修改后即时生效。每个站点支持 post-card 或 xqbj-list 主题，
-// 视频地址从详情页 .dplayer[data-config] 中提取（直链 m3u8 或需二次解析的 player 接口）。
-//
-// The crawler fetches list/search pages from ALL enabled sites in parallel,
-// aggregates articles by ID, then fetches detail pages for each.
-//
-// Usage (CLI):
+// 命令行：
 //   node crawler.js --pages 1-3
-//   node crawler.js --search <keyword> --search-pages 2
+//   node crawler.js --search <关键词> --search-pages 2
 
 const fs = require('fs');
 const path = require('path');
@@ -20,10 +13,8 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 
-// 站点配置：从 output/sites.json 动态加载，可在页面修改后即时生效。
-// 每个站点：{ url, name, todayPath, enabled, archiveSuffix? }
-//   archiveSuffix：归档详情页 URL 后缀，默认 "/"（/archives/ID/），
-//                  ".html" 用于 /archives/ID.html 格式（如 wiki 站）。
+// 站点配置：{ url, name, todayPath, enabled, archiveSuffix? }
+// archiveSuffix 默认 "/"（/archives/ID/），".html" 用于 /archives/ID.html
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
 const DEFAULT_SITE_CONFIGS = [
   { url: 'https://armed.izbfsaxh.cc', name: '91吃瓜', todayPath: '/category/zxcghl/', enabled: true },
@@ -324,11 +315,14 @@ function parseDetailPage(html) {
     if (t) tagSet.add(t);
   });
 
-  // Category — breadcrumb first（站点品牌相关分类丢弃）
+  // Category — breadcrumb first；站点品牌相关分类丢弃
+  const acceptCategory = (raw) => {
+    const cat = String(raw || '').trim();
+    return cat && !isSiteBrandTag(cat, SITE_CONFIGS) ? cat : null;
+  };
   const $crumb = $('p.sp_breadcrumb_nav a');
   if ($crumb.length >= 2) {
-    const cat = $crumb.eq(1).text().trim();
-    if (cat && !isSiteBrandTag(cat, SITE_CONFIGS)) result.category = cat;
+    result.category = acceptCategory($crumb.eq(1).text());
   }
 
   // Video + tags + category from .dplayer[data-config]
@@ -350,8 +344,7 @@ function parseDetailPage(html) {
 
     // Category from data-video_type_name if breadcrumb found nothing
     if (!result.category) {
-      const cat = ($div.attr('data-video_type_name') || '').trim();
-      if (cat && !isSiteBrandTag(cat, SITE_CONFIGS)) result.category = cat;
+      result.category = acceptCategory($div.attr('data-video_type_name'));
     }
 
     // Video URL — two data-config shapes:
@@ -909,9 +902,7 @@ if (require.main === module) {
 
 module.exports = {
   crawl, parseDetailPage, resolvePlayerUrl, loadIndex, mergeIntoIndex,
-  // SITES 仍被 scripts/probe-sites.js 引用；BASE_URL 请用 getBaseUrl() 访问。
   SITES, UA,
   loadSiteConfigs, saveSiteConfigs, reloadSites,
   getSiteConfigs, getSites, getBaseUrl,
-  filterSiteBrandTags, isSiteBrandTag,
 };

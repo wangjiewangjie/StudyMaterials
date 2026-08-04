@@ -4,6 +4,7 @@ frontend/node_modules/
 
 # Runtime data (regenerated on startup crawl)
 output/
+.server-port
 
 # Logs
 *.log
@@ -17,6 +18,8 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Editor
+# Editor / AI 工具缓存
 .vscode/
 .idea/
+.trae/
+.cursor/

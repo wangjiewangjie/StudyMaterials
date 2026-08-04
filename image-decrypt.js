@@ -1,15 +1,12 @@
-// image-decrypt.js
-// Decrypts cover images from the source website.
-// The website serves AES-encrypted images that are decrypted client-side
-// via the decryptImage() function in zzz.js. This module loads that
-// function in a VM sandbox and exposes a simple decryptBuffer() API.
+// image-decrypt.js — 解密封面图。
+// 源站封面经 AES 加密，浏览器侧靠 zzz.js 的 decryptImage 解密；
+// 本模块在 VM 沙箱中加载同款逻辑，对外提供 decryptBuffer()。
 
 const vm = require('vm');
 const axios = require('axios');
 const CryptoJS = require('crypto-js');
 
-// zzz.js 由各 post-card 源站同源提供（含 decryptImage）。指向当前存活的 91吃瓜
-// 镜像（旧 bite.ygvttlxzy.cc 已宕机）；各站 zzz.js 内容一致，解密逻辑通用。
+// zzz.js 由 post-card 源站提供；各站内容一致，换镜像只改 BASE_URL
 const BASE_URL = 'https://armed.izbfsaxh.cc';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 const ZZZ_URL = BASE_URL + '/usr/plugins/tbxw/js/zzz.js';

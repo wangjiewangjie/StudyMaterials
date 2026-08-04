@@ -1,16 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  fetchVideos, fetchFavorites, addFavorite, removeFavorite, fetchSites, fetchTags, hostnameOf,
+  fetchVideos, fetchFavorites, addFavorite, removeFavorite, fetchSites, fetchTags,
 } from '../services/api.js';
-
-// 站点名称映射默认值，与 crawler.js 的 DEFAULT_SITE_CONFIGS 一致；
-// /api/sites 返回后会用配置里的 name 覆盖（hostname -> name）。
-const SITE_NAMES = {
-  'bite.ygvttlxzy.cc': '91吃瓜',
-  'd1ve8vvwughzqa.cloudfront.net': '91视频',
-  'breast.eiejvjgex.cc': '51fans',
-  'assert.pbtiodqn.cc': '51爆料',
-};
 
 // 视频与收藏与站点的统一数据 hook，供 App 与各页面共享。
 export function useAppData(message) {
@@ -21,33 +12,14 @@ export function useAppData(message) {
   const [tagList, setTagList] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [lastQuery, setLastQuery] = useState('');
-  const siteNameMapRef = useRef({ ...SITE_NAMES });
 
-  // 站点配置加载后刷新名称映射
   const loadSites = useCallback(async () => {
     try {
       const data = await fetchSites();
-      const list = data.sites || [];
-      setSites(list);
-      const map = { ...SITE_NAMES };
-      list.forEach((s) => {
-        if (!s || !s.url) return;
-        const host = hostnameOf(s.url);
-        if (host) map[host] = s.name || map[host] || host.split('.')[0];
-      });
-      siteNameMapRef.current = map;
+      setSites(data.sites || []);
     } catch (_) { /* 忽略站点加载失败 */ }
   }, []);
 
-  // 站点来源标签：优先配置名，其次主机名首段
-  const siteLabel = useCallback((siteUrl) => {
-    if (!siteUrl) return '未知来源';
-    const host = hostnameOf(siteUrl);
-    if (!host) return String(siteUrl);
-    return siteNameMapRef.current[host] || host.split('.')[0];
-  }, []);
-
-  // 加载展示标签（过滤/阈值/排序/固定由服务端处理）
   const loadTags = useCallback(async () => {
     try {
       const data = await fetchTags();
@@ -57,14 +29,12 @@ export function useAppData(message) {
     }
   }, []);
 
-  // 加载视频列表（q 为空则全部）
   const loadVideos = useCallback(async (q) => {
     setLoadingList(true);
     setLastQuery(q || '');
     try {
       const data = await fetchVideos(q);
       setItems(data.items || []);
-      // 列表变更后刷新标签（新同步可能触发固定）
       loadTags();
     } catch (e) {
       if (e && e.name === 'AbortError') return;
@@ -74,7 +44,6 @@ export function useAppData(message) {
     }
   }, [message, loadTags]);
 
-  // 加载收藏
   const loadFavorites = useCallback(async () => {
     try {
       const data = await fetchFavorites();
@@ -84,7 +53,6 @@ export function useAppData(message) {
     } catch (_) { /* 忽略收藏加载失败 */ }
   }, []);
 
-  // 切换收藏状态
   const toggleFavorite = useCallback(async (item) => {
     if (!item || !item.id) return;
     const isFav = favIds.has(item.id);
@@ -116,7 +84,6 @@ export function useAppData(message) {
     }
   }, [favIds, message]);
 
-  // 清空收藏（收藏页清空按钮）
   const clearAllFavorites = useCallback(async () => {
     const ids = Array.from(favIds);
     for (const id of ids) {
@@ -133,7 +100,6 @@ export function useAppData(message) {
     loadSites();
   }, [loadVideos, loadFavorites, loadSites]);
 
-  // 各站点视频计数，供同步中心数据源卡片使用
   const siteCounts = useMemo(() => {
     const counts = new Map();
     items.forEach((it) => {
@@ -146,9 +112,9 @@ export function useAppData(message) {
   return {
     items, setItems,
     favorites, favIds,
-    sites, siteLabel, siteCounts, tagList,
+    sites, siteCounts, tagList,
     loadingList, lastQuery, setLastQuery,
-    loadVideos, loadFavorites, loadSites, loadTags,
+    loadVideos, loadFavorites, loadSites,
     toggleFavorite, clearAllFavorites,
   };
 }

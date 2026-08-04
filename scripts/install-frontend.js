@@ -1,7 +1,5 @@
-// Install frontend deps after root `npm install`.
-// Uses SKIP_FRONTEND_INSTALL to avoid infinite recursion: nested
-// `npm install` under frontend/ can re-trigger this root postinstall
-// (npm walks up to the parent package.json on Windows).
+// 根目录 npm install 后自动安装 frontend 依赖。
+// SKIP_FRONTEND_INSTALL 防止嵌套 npm install 再次触发本脚本（Windows 上会向上找到根 package.json）。
 'use strict';
 
 if (process.env.SKIP_FRONTEND_INSTALL) {

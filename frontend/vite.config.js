@@ -3,11 +3,8 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 
-// Vite config: dev server proxies /api and /proxy to Express,
-// build outputs to ../public/build so Express serves it in production.
-//
-// 后端端口自动读取自项目根目录的 .server-port 文件（由 server.js 写入），
-// 若文件不存在则回退到默认 3000。
+// 构建输出到 ../public/build；开发态把 /api /proxy 代理到后端。
+// 后端端口读自根目录 .server-port（由 server.js 写入），默认 3000。
 
 const portFile = path.resolve(__dirname, '..', '.server-port');
 const backendPort = fs.existsSync(portFile)
