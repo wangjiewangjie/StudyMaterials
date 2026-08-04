@@ -25,16 +25,16 @@ function SkeletonGrid({ count = 12 }) {
       {Array.from({ length: count }, (_, i) => (
         <Col key={i} {...CARD_RESPONSIVE}>
           <div
-            className="overflow-hidden rounded-xl border border-white/5 bg-[#121212] rise-in mb-5"
+            className="overflow-hidden rounded-lg border border-white/5 bg-[#121212] rise-in mb-5"
             style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
           >
             <div className="skel w-full" style={{ aspectRatio: '16/9' }} />
             <div className="p-3.5 space-y-2">
-              <div className="skel h-3.5 w-[92%] rounded-sm" />
-              <div className="skel h-3.5 w-[64%] rounded-sm" />
+              <div className="skel h-3.5 w-[92%] rounded-lg" />
+              <div className="skel h-3.5 w-[64%] rounded-lg" />
               <div className="flex gap-2 mt-2">
-                <div className="skel h-3 w-12 rounded-sm" />
-                <div className="skel h-3 w-16 rounded-sm" />
+                <div className="skel h-3 w-12 rounded-lg" />
+                <div className="skel h-3 w-16 rounded-lg" />
               </div>
             </div>
           </div>
@@ -102,7 +102,7 @@ export default function HomeView({
             <Tag.CheckableTag
               checked={!activeTag}
               onChange={() => onTagChange('')}
-              className="!px-3 !py-1 !rounded-full !text-xs !font-semibold !m-0 !shrink-0"
+              className="!px-3 !py-1 !rounded-lg !text-xs !font-semibold !m-0 !shrink-0"
             >
               全部
             </Tag.CheckableTag>
@@ -111,7 +111,7 @@ export default function HomeView({
                 key={tag}
                 checked={activeTag === tag}
                 onChange={() => onTagChange(activeTag === tag ? '' : tag)}
-                className="!px-3 !py-1 !rounded-full !text-xs !font-semibold !m-0 !shrink-0"
+                className="!px-3 !py-1 !rounded-lg !text-xs !font-semibold !m-0 !shrink-0"
               >
                 #{tag}
               </Tag.CheckableTag>
@@ -131,7 +131,7 @@ export default function HomeView({
             {filtered.length === 0 ? (
               <Empty
                 image={(
-                  <span className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-[#FF9900]/8 border border-[#FF9900]/15 text-[#FF9900]/70 rise-in">
+                  <span className="inline-flex items-center justify-center w-20 h-20 rounded-lg bg-[#FF9900]/8 border border-[#FF9900]/15 text-[#FF9900]/70 rise-in">
                     <InboxOutlined style={{ fontSize: 40 }} />
                   </span>
                 )}

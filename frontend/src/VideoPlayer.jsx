@@ -194,7 +194,6 @@ function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
     playsInline: true,
     autoPlayback: false,
     airplay: true,
-    theme: '#FF9900',
     lang: 'zh-cn',
     setting: true,
     hotkey: true,

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Tag, Row, Col } from 'antd';
 import {
-  ArrowLeftOutlined, HeartFilled, HeartOutlined, LinkOutlined,
+  ArrowLeftOutlined, StarFilled, StarOutlined, LinkOutlined,
 } from '@ant-design/icons';
 import VideoPlayer from '../VideoPlayer.jsx';
 import VideoCard from '../components/VideoCard.jsx';
@@ -79,7 +79,7 @@ export default function DetailView({
         <Button
           onClick={onBack}
           icon={<ArrowLeftOutlined style={{ fontSize: 14 }} />}
-          className="!flex !items-center !gap-2 !px-3.5 !py-2 !h-auto !bg-neutral-800/80 hover:!bg-neutral-700 !text-neutral-200 !rounded-xl !text-xs !font-semibold !border-0 shrink-0"
+          className="!flex !items-center !gap-2 !px-3.5 !py-2 !h-auto !bg-neutral-800/80 hover:!bg-neutral-700 !text-neutral-200 !rounded-lg !text-xs !font-semibold !border-0 shrink-0"
         >
           返回浏览列表
         </Button>
@@ -91,14 +91,14 @@ export default function DetailView({
             target="_blank"
             rel="noreferrer"
             title="在新标签打开原文"
-            className="!flex !items-center !gap-1.5 !text-xs !text-amber-400 !font-medium !bg-neutral-800 hover:!bg-neutral-700 !px-2.5 !py-1 !rounded !border !border-neutral-700"
+            className="!flex !items-center !gap-1.5 !text-xs !text-amber-400 !font-medium !bg-neutral-800 hover:!bg-neutral-700 !px-2.5 !py-1 !rounded-lg !border !border-neutral-700"
           >
             数据源: {sourceName}
           </Button>
         ) : (
           <div className="text-xs text-neutral-400 flex items-center gap-2 shrink-0">
             <span>数据源:</span>
-            <Tag className="!m-0 !text-amber-400 !font-medium !bg-neutral-800 !px-2 !py-0.5 !rounded !border !border-neutral-700">
+            <Tag className="!m-0 !text-amber-400 !font-medium !bg-neutral-800 !px-2 !py-0.5 !rounded-lg !border !border-neutral-700">
               {sourceName}
             </Tag>
           </div>
@@ -106,7 +106,7 @@ export default function DetailView({
       </div>
 
       {/* 播放器 */}
-      <div className="w-full aspect-video rounded-2xl overflow-hidden border border-white/5 shadow-2xl bg-[#0A0A0A]">
+      <div className="w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-[#0A0A0A]">
         {hasVideo ? (
           <VideoPlayer item={item} onTags={handleTags} />
         ) : (
@@ -117,7 +117,7 @@ export default function DetailView({
       </div>
 
       {/* 元信息卡片 */}
-      <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl p-6 shadow-2xl space-y-6">
+      <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-6 shadow-2xl space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 border-b border-white/10 pb-5">
           <div className="space-y-2 max-w-3xl">
             <h1 className="text-2xl sm:text-3xl font-black italic tracking-tighter text-white leading-snug">
@@ -127,9 +127,9 @@ export default function DetailView({
           <Button
             onClick={() => onToggleFavorite(item)}
             icon={favorited
-              ? <HeartFilled style={{ color: '#ef4444' }} />
-              : <HeartOutlined />}
-            className={`!flex !items-center !gap-2 !px-5 !py-2.5 !h-auto !rounded-xl !text-xs !font-bold !border shrink-0 ${
+              ? <StarFilled style={{ color: '#ef4444' }} />
+              : <StarOutlined />}
+            className={`!flex !items-center !gap-2 !px-5 !py-2.5 !h-auto !rounded-lg !text-xs !font-bold !border shrink-0 ${
               favorited
                 ? '!bg-red-500/20 !text-red-400 !border-red-500/40 hover:!bg-red-500/30'
                 : '!bg-white/5 !text-gray-300 !border-white/10 hover:!bg-white/10'
@@ -140,7 +140,7 @@ export default function DetailView({
         </div>
 
         {/* 元信息四宫格 */}
-        <Row gutter={[12, 12]} className="detail-meta-grid bg-[#121212] border border-white/5 p-3.5 rounded-xl text-xs text-gray-300">
+        <Row gutter={[12, 12]} className="detail-meta-grid bg-[#121212] border border-white/5 p-3.5 rounded-lg text-xs text-gray-300">
           <Col xs={12} sm={6}>
             <div className="text-[10px] text-gray-500 uppercase font-bold">视频时长</div>
             <div className="font-bold text-white">—</div>

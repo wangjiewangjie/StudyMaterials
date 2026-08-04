@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Input, Empty, Modal, Typography, Row, Col, Button, Segmented } from 'antd';
 import {
-  HeartFilled, DownloadOutlined, DeleteOutlined, SearchOutlined,
+  StarFilled, DownloadOutlined, DeleteOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import VideoCard from '../components/VideoCard.jsx';
 import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
@@ -61,13 +61,13 @@ export default function FavoritesView({
   return (
     <main className="max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-24 pb-16 space-y-8">
       {/* 顶部横幅 */}
-      <section className="relative overflow-hidden rounded-2xl border border-white/5 bg-gradient-to-br from-[#1a1a1e] to-[#0a0a0a] p-6 sm:p-8">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-red-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
+      <section className="relative overflow-hidden rounded-lg border border-white/5 bg-gradient-to-br from-[#1a1a1e] to-[#0a0a0a] p-6 sm:p-8">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-red-500/10 rounded-lg blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-2">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center">
-                <HeartFilled style={{ color: '#ef4444' }} />
+              <div className="w-10 h-10 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center">
+                <StarFilled style={{ color: '#ef4444' }} />
               </div>
               <div>
                 <h1 className="text-2xl sm:text-3xl font-black italic tracking-tighter text-white">
@@ -85,7 +85,7 @@ export default function FavoritesView({
               disabled={favorites.length === 0}
               icon={<DownloadOutlined style={{ fontSize: 14 }} />}
               title="导出收藏列表 (JSON / TXT)"
-              className="!flex !items-center !gap-1.5 !px-4 !py-2 !h-auto !rounded-xl !text-xs !font-bold !bg-white/5 hover:!bg-white/10 !text-gray-300 !border !border-white/10"
+              className="!flex !items-center !gap-1.5 !px-4 !py-2 !h-auto !rounded-lg !text-xs !font-bold !bg-white/5 hover:!bg-white/10 !text-gray-300 !border !border-white/10"
             >
               导出列表
             </Button>
@@ -95,7 +95,7 @@ export default function FavoritesView({
               disabled={favorites.length === 0}
               icon={<DeleteOutlined style={{ fontSize: 14 }} />}
               title="清空所有收藏"
-              className="!flex !items-center !gap-1.5 !px-4 !py-2 !h-auto !rounded-xl !text-xs !font-bold !bg-red-500/10 hover:!bg-red-500/20 !text-red-400 !border !border-red-500/30"
+              className="!flex !items-center !gap-1.5 !px-4 !py-2 !h-auto !rounded-lg !text-xs !font-bold !bg-red-500/10 hover:!bg-red-500/20 !text-red-400 !border !border-red-500/30"
             >
               清空
             </Button>
@@ -112,14 +112,14 @@ export default function FavoritesView({
             placeholder="在收藏库中搜索..."
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
-            className="!bg-[#141416] !border-white/10 !rounded-xl !pl-10 !pr-4 !py-2.5 !text-sm !text-white"
+            className="!bg-[#141416] !border-white/10 !rounded-lg !pl-10 !pr-4 !py-2.5 !text-sm !text-white"
           />
         </div>
         <Segmented
           options={SORT_OPTIONS}
           value={sort}
           onChange={(v) => setSort(v)}
-          className="!bg-[#1a1a1e] !rounded-xl !p-1"
+          className="!bg-[#1a1a1e] !rounded-lg !p-1"
         />
       </div>
 

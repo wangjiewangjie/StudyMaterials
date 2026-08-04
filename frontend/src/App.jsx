@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { App as AntdApp, Drawer, Button } from 'antd';
 import {
-  HeartOutlined, HeartFilled, FileTextOutlined, SyncOutlined,
+  StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import AppHeader from './components/AppHeader.jsx';
 import SyncModal from './components/SyncModal.jsx';
@@ -262,17 +262,18 @@ export default function App() {
           <Button
             block
             onClick={handleFavoritesClick}
-            icon={view === VIEW.FAVORITES ? <HeartFilled style={{ color: '#ef4444' }} /> : <HeartOutlined />}
-            className={`!flex !items-center !justify-between !h-11 !pl-3 !pr-4 !rounded-xl !text-sm !font-bold !border !gap-1 ${
+            className={`!flex !items-center !justify-between !h-11 !pl-3 !pr-4 !rounded-lg !text-sm !font-bold !border ${
               view === VIEW.FAVORITES
                 ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
                 : '!bg-[#141416] !text-neutral-200 !border-white/10'
             }`}
-            styles={{ icon: { marginInlineEnd: '4px' } }}
           >
-            <span className="flex items-center gap-1">我的收藏</span>
+            <span className="flex items-center gap-1">
+              {view === VIEW.FAVORITES ? <StarFilled style={{ color: '#ef4444' }} /> : <StarOutlined />}
+              我的收藏
+            </span>
             {favorites.length > 0 && (
-              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#FF9900] text-black shrink-0">
+              <span className="text-[10px] font-black min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-lg bg-[#FF9900] text-black shrink-0">
                 {favorites.length}
               </span>
             )}
@@ -282,7 +283,7 @@ export default function App() {
             block
             onClick={handleSyncCenterClick}
             icon={<FileTextOutlined />}
-            className={`!flex !items-center !justify-start !h-11 !pl-3 !rounded-xl !text-sm !font-bold !border !gap-1 ${
+            className={`!flex !items-center !justify-start !h-11 !pl-3 !rounded-lg !text-sm !font-bold !border !gap-1 ${
               view === VIEW.SYNC_CENTER
                 ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
                 : '!bg-[#141416] !text-neutral-200 !border-white/10'
@@ -296,7 +297,7 @@ export default function App() {
             block
             onClick={handleStartSync}
             icon={<SyncOutlined spin={syncing} />}
-            className="!flex !items-center !justify-start !h-11 !pl-3 !rounded-xl !text-sm !font-bold !bg-[#FF9900]/10 !border !border-[#FF9900]/30 !text-[#FF9900] !gap-1"
+            className="!flex !items-center !justify-start !h-11 !pl-3 !rounded-lg !text-sm !font-bold !bg-[#FF9900]/10 !border !border-[#FF9900]/30 !text-[#FF9900] !gap-1"
             styles={{ icon: { marginInlineEnd: '4px' } }}
           >
             {syncing ? '同步中…' : '立即同步'}

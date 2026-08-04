@@ -1,6 +1,6 @@
 import { Input, Button } from 'antd';
 import {
-  SearchOutlined, HeartOutlined, HeartFilled, FileTextOutlined, MenuOutlined,
+  SearchOutlined, StarOutlined, StarFilled, FileTextOutlined, MenuOutlined,
 } from '@ant-design/icons';
 
 // 顶部共享 Header：Logo / 搜索 / 操作按钮。
@@ -29,7 +29,7 @@ export default function AppHeader({
           className="!flex !items-center !gap-1 !p-0 !h-auto !bg-transparent !border-0 shrink-0 group"
           title="返回首页"
         >
-          <span className="bg-[#FF9900] text-black font-black italic text-base sm:text-xl px-2 py-0.5 rounded tracking-tighter group-hover:bg-[#ffaa22] transition-colors">
+          <span className="bg-[#FF9900] text-black font-black italic text-base sm:text-xl px-2 py-0.5 rounded-lg tracking-tighter group-hover:bg-[#ffaa22] transition-colors">
             STUDY
           </span>
           <span className="text-base sm:text-xl font-black italic tracking-tighter text-white group-hover:text-neutral-200 transition-colors hidden sm:inline">
@@ -46,7 +46,7 @@ export default function AppHeader({
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             onPressEnter={onSearch}
-            className="!bg-[#141416] !border-white/10 !rounded-full !pl-9 !pr-7 !py-1.5 !text-xs !text-white"
+            className="!bg-[#141416] !border-white/10 !rounded-lg !pl-9 !pr-7 !py-1.5 !text-xs !text-white"
             styles={{ input: { background: 'transparent' } }}
           />
         </div>
@@ -58,7 +58,7 @@ export default function AppHeader({
             size="small"
             onClick={onOpenDrawer}
             icon={<MenuOutlined style={{ fontSize: 18 }} />}
-            className="!flex !items-center !justify-center !w-8 !h-8 !rounded-full !text-[#FF9900] hover:!bg-[#FF9900]/10 shrink-0 !border-0 !bg-transparent !min-w-0"
+            className="!flex !items-center !justify-center !w-8 !h-8 !rounded-lg !text-[#FF9900] hover:!bg-[#FF9900]/10 shrink-0 !border-0 !bg-transparent !min-w-0"
             aria-label="打开菜单"
           />
         ) : (
@@ -68,8 +68,8 @@ export default function AppHeader({
               type="text"
               size="small"
               onClick={onFavoritesClick}
-              icon={isFavoritesView ? <HeartFilled style={{ fontSize: 13 }} /> : <HeartOutlined style={{ fontSize: 13 }} />}
-              className={`!flex !items-center !gap-1 sm:!gap-1.5 !px-2.5 sm:!px-3 !py-1.5 !rounded-full !text-xs !font-bold !border ${
+              icon={isFavoritesView ? <StarFilled style={{ fontSize: 13 }} /> : <StarOutlined style={{ fontSize: 13 }} />}
+              className={`!flex !items-center !gap-1 sm:!gap-1.5 !px-2.5 sm:!px-3 !py-1.5 !rounded-lg !text-xs !font-bold !border ${
                 isFavoritesView
                   ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
                   : '!bg-[#141416] hover:!bg-white/10 !text-neutral-300 !border-white/10'
@@ -77,7 +77,7 @@ export default function AppHeader({
             >
               <span className="hidden sm:inline">收藏</span>
               {favoritesCount > 0 && (
-                <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full min-w-4 text-center bg-[#FF9900] text-black">
+                <span className="text-[10px] font-black min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-lg bg-[#FF9900] text-black">
                   {favoritesCount}
                 </span>
               )}
@@ -88,7 +88,7 @@ export default function AppHeader({
               size="small"
               onClick={onSyncCenterClick}
               icon={<FileTextOutlined style={{ fontSize: 13 }} />}
-              className="!flex !items-center !gap-1 sm:!gap-1.5 !px-2.5 sm:!px-3 !py-1.5 !rounded-full !text-xs !font-bold !bg-[#141416] hover:!bg-white/10 !text-neutral-300 !border !border-white/10"
+              className="!flex !items-center !gap-1 sm:!gap-1.5 !px-2.5 sm:!px-3 !py-1.5 !rounded-lg !text-xs !font-bold !bg-[#141416] hover:!bg-white/10 !text-neutral-300 !border !border-white/10"
             >
               <span className="hidden sm:inline">日志</span>
             </Button>
@@ -97,9 +97,9 @@ export default function AppHeader({
               type="text"
               size="small"
               onClick={onSyncClick}
-              className="!flex !items-center !gap-1.5 !px-2.5 sm:!px-3 !py-1.5 !rounded-full !text-xs !bg-[#FF9900]/10 !border !border-[#FF9900]/30 !text-[#FF9900] hover:!bg-[#FF9900]/20"
+              className="!flex !items-center !gap-1.5 !px-2.5 sm:!px-3 !py-1.5 !rounded-lg !text-xs !bg-[#FF9900]/10 !border !border-[#FF9900]/30 !text-[#FF9900] hover:!bg-[#FF9900]/20"
             >
-              <span className={`w-2 h-2 bg-[#FF9900] rounded-full ${syncing ? 'animate-pulse' : ''}`} />
+              <span className={`w-2 h-2 bg-[#FF9900] rounded-lg ${syncing ? 'animate-pulse' : ''}`} />
               <span className="font-bold text-[11px]">同步</span>
             </Button>
           </div>

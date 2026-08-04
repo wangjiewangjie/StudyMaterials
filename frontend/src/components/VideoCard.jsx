@@ -1,7 +1,7 @@
 import { useState, useCallback, memo } from 'react';
 import { Card, Button, Tag } from 'antd';
 import {
-  HeartOutlined, HeartFilled, PlayCircleFilled, PictureOutlined,
+  StarOutlined, StarFilled, PlayCircleFilled, PictureOutlined,
 } from '@ant-design/icons';
 import { formatDate, hostnameOf } from '../services/api.js';
 
@@ -72,8 +72,8 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
           aria-label={favorited ? '取消收藏' : '加入收藏'}
           onClick={handleFav}
           icon={favorited
-            ? <HeartFilled style={{ color: '#ef4444' }} />
-            : <HeartOutlined style={{ color: '#fff' }} />}
+            ? <StarFilled style={{ color: '#ef4444' }} />
+            : <StarOutlined style={{ color: '#fff' }} />}
           className={`!absolute !top-2.5 !right-2.5 !z-[2] !w-8 !h-8 !backdrop-blur-md !flex !items-center !justify-center !text-base ${
             favorited
               ? '!bg-red-500/20 !text-red-500 !border !border-red-500/40'
@@ -84,7 +84,7 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
         {/* 悬停播放圆钮（桌面端） */}
         {hasVideo && (
           <span className="card-play absolute inset-0 z-[1] hidden md:flex items-center justify-center pointer-events-none">
-            <span className="w-12 h-12 rounded-full border-2 border-white/90 text-[#FF9900] flex items-center justify-center text-[30px] shadow-[0_4px_20px_rgba(0,0,0,.6)] backdrop-blur-sm bg-black/60">
+            <span className="w-12 h-12 rounded-lg border-2 border-white/90 text-[#FF9900] flex items-center justify-center text-[30px] shadow-[0_4px_20px_rgba(0,0,0,.6)] backdrop-blur-sm bg-black/60">
               <PlayCircleFilled />
             </span>
           </span>
@@ -99,12 +99,12 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
         <div className="hidden md:block">
           <div className="flex flex-wrap items-center gap-1.5 mt-2 mb-2.5">
             {item.category && (
-              <Tag className="!m-0 !text-[10px] !uppercase !font-bold !tracking-wider !bg-white/5 !text-gray-400 !border-white/5 !rounded">
+              <Tag className="!m-0 !text-[10px] !uppercase !font-bold !tracking-wider !bg-white/5 !text-gray-400 !border-white/5 !rounded-lg">
                 {item.category}
               </Tag>
             )}
             {(item.tags || []).slice(0, 2).map((t) => (
-              <Tag key={t} className="!m-0 !text-[10px] !bg-black/40 !text-gray-500 !border-white/5 !rounded">
+              <Tag key={t} className="!m-0 !text-[10px] !bg-black/40 !text-gray-500 !border-white/5 !rounded-lg">
                 #{t}
               </Tag>
             ))}
@@ -112,7 +112,7 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
           <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[11px] text-gray-400">
             <span className="tabular-nums">{item.datePublished ? formatDate(item.datePublished) : '—'}</span>
             {showFavBadge ? (
-              <Tag color="red" className="!m-0 !text-[10px] !font-bold !rounded">已收藏</Tag>
+              <Tag color="red" className="!m-0 !text-[10px] !font-bold !rounded-lg">已收藏</Tag>
             ) : (
               <span className="text-gray-500 text-[10px] truncate max-w-[120px]">{sourceLabel}</span>
             )}

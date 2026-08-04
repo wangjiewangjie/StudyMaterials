@@ -104,7 +104,7 @@ export default function SyncCenterView({
       width: 90,
       render: (_, record) => {
         const k = resultKey(record);
-        return <Tag color={RESULT_TAG_COLOR[k]} className="!m-0 !text-[10px] !font-black !rounded">{RESULT_LABEL[k]}</Tag>;
+        return <Tag color={RESULT_TAG_COLOR[k]} className="!m-0 !text-[10px] !font-black !rounded-lg">{RESULT_LABEL[k]}</Tag>;
       },
     },
     {
@@ -120,12 +120,12 @@ export default function SyncCenterView({
   return (
     <main className="max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-24 pb-16 space-y-8">
       {/* 横幅 */}
-      <section className="relative overflow-hidden rounded-2xl border border-white/5 bg-gradient-to-br from-[#1a1a1e] via-[#121212] to-[#0a0a0a] p-6 sm:p-8">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-[#FF9900]/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
+      <section className="relative overflow-hidden rounded-lg border border-white/5 bg-gradient-to-br from-[#1a1a1e] via-[#121212] to-[#0a0a0a] p-6 sm:p-8">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-[#FF9900]/10 rounded-lg blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
         <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-5">
           <div className="space-y-3 max-w-2xl">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-[#FF9900]/20 border border-[#FF9900]/40 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-lg bg-[#FF9900]/20 border border-[#FF9900]/40 flex items-center justify-center">
                 <SyncOutlined className="text-[#FF9900] text-xl" spin={syncing} />
               </div>
               <div>
@@ -141,7 +141,7 @@ export default function SyncCenterView({
             onClick={onTriggerSync}
             disabled={syncing}
             icon={<PlayCircleFilled style={{ fontSize: 16 }} />}
-            className="!flex !items-center !justify-center !gap-2 !px-6 !py-3 !h-auto !rounded-xl !text-sm !font-black !bg-[#FF9900] hover:!bg-[#ffaa22] !border-0 !text-black shrink-0"
+            className="!flex !items-center !justify-center !gap-2 !px-6 !py-3 !h-auto !rounded-lg !text-sm !font-black !bg-[#FF9900] hover:!bg-[#ffaa22] !border-0 !text-black shrink-0"
           >
             {syncing ? '同步中…' : '立即全量同步'}
           </Button>
@@ -151,7 +151,7 @@ export default function SyncCenterView({
       {/* 统计卡栅格 */}
       <Row gutter={STAT_GUTTER}>
         <Col {...STAT_RESPONSIVE} className="mb-3 sm:mb-4">
-          <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl p-4 sm:p-5 space-y-3 h-full">
+          <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 sm:p-5 space-y-3 h-full">
             <div className="flex items-center gap-2 text-gray-400">
               <DatabaseOutlined className="text-[#FF9900]" style={{ fontSize: 16 }} />
               <span className="text-[11px] font-bold uppercase tracking-wider">数据源节点</span>
@@ -166,7 +166,7 @@ export default function SyncCenterView({
           </div>
         </Col>
         <Col {...STAT_RESPONSIVE} className="mb-3 sm:mb-4">
-          <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl p-4 sm:p-5 space-y-3 h-full">
+          <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 sm:p-5 space-y-3 h-full">
             <div className="flex items-center gap-2 text-gray-400">
               <VideoCameraOutlined className="text-[#FF9900]" style={{ fontSize: 16 }} />
               <span className="text-[11px] font-bold uppercase tracking-wider">索引视频总数</span>
@@ -181,7 +181,7 @@ export default function SyncCenterView({
           </div>
         </Col>
         <Col {...STAT_RESPONSIVE} className="mb-3 sm:mb-4">
-          <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl p-4 sm:p-5 space-y-3 h-full">
+          <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 sm:p-5 space-y-3 h-full">
             <div className="flex items-center gap-2 text-gray-400">
               <ClockCircleOutlined className="text-[#FF9900]" style={{ fontSize: 16 }} />
               <span className="text-[11px] font-bold uppercase tracking-wider">上次同步</span>
@@ -193,7 +193,7 @@ export default function SyncCenterView({
           </div>
         </Col>
         <Col {...STAT_RESPONSIVE} className="mb-3 sm:mb-4">
-          <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl p-4 sm:p-5 space-y-3 h-full">
+          <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 sm:p-5 space-y-3 h-full">
             <div className="flex items-center gap-2 text-gray-400">
               <ExclamationCircleOutlined className="text-emerald-400" style={{ fontSize: 16 }} />
               <span className="text-[11px] font-bold uppercase tracking-wider">同步状态</span>
@@ -209,7 +209,7 @@ export default function SyncCenterView({
       </Row>
 
       {/* 只读提示 */}
-      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-start gap-3">
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 flex items-start gap-3">
         <WarningOutlined className="text-amber-400 shrink-0 mt-0.5" style={{ fontSize: 18 }} />
         <div className="space-y-1">
           <div className="text-sm font-bold text-amber-400">只读模式运行中</div>
@@ -223,7 +223,7 @@ export default function SyncCenterView({
       <section className="space-y-4">
         <div className="flex items-center justify-between pb-2">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5">
-            <span className="w-1 h-5 bg-[#FF9900] rounded-full inline-block" />
+            <span className="w-1 h-5 bg-[#FF9900] rounded-lg inline-block" />
             <span>数据源节点</span>
           </h2>
         </div>
@@ -233,7 +233,7 @@ export default function SyncCenterView({
           <Row gutter={SRC_GUTTER}>
             {sourceCards.map((src) => (
               <Col key={src.key} {...SRC_RESPONSIVE} className="mb-3 sm:mb-4">
-                <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl p-4 space-y-3 hover:border-[#FF9900]/30 transition-colors h-full">
+                <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-4 space-y-3 hover:border-[#FF9900]/30 transition-colors h-full">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-9 h-9 rounded-lg bg-[#FF9900]/10 border border-[#FF9900]/30 flex items-center justify-center shrink-0">
@@ -271,11 +271,12 @@ export default function SyncCenterView({
       <section className="space-y-4">
         <div className="flex items-center justify-between pb-2">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5">
-            <span className="w-1 h-5 bg-[#FF9900] rounded-full inline-block" />
+            <span className="w-1 h-5 bg-[#FF9900] rounded-lg inline-block" />
             <span>同步日志</span>
           </h2>
         </div>
-        <div className="bg-[#0A0A0A] border border-white/5 rounded-2xl overflow-hidden">
+        {/* 桌面端：表格 */}
+        <div className="hidden md:block bg-[#0A0A0A] border border-white/5 rounded-lg overflow-hidden">
           <Table
             columns={columns}
             dataSource={syncHistory}
@@ -297,6 +298,37 @@ export default function SyncCenterView({
                 )
               : undefined}
           />
+        </div>
+        {/* 移动端：卡片列表 */}
+        <div className="md:hidden space-y-2">
+          {syncHistory.length === 0 ? (
+            <div className="py-10 text-center text-gray-500 bg-[#0A0A0A] border border-white/5 rounded-lg">
+              暂无同步记录，点击右上角「立即全量同步」开始第一次抓取
+            </div>
+          ) : (
+            <>
+              {syncHistory.map((entry, idx) => {
+                const k = resultKey(entry);
+                return (
+                  <div key={idx} className="bg-[#0A0A0A] border border-white/5 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-gray-500 tabular-nums">
+                        {entry.time ? new Date(entry.time).toLocaleString('zh-CN', { hour12: false }) : '—'}
+                      </span>
+                      <Tag color={RESULT_TAG_COLOR[k]} className="!m-0 !text-[10px] !font-black !rounded-lg">{RESULT_LABEL[k]}</Tag>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-white font-medium truncate">{entry.source || '本地索引'}</span>
+                      <span className="text-gray-400 tabular-nums shrink-0">{entry.elapsed || '—'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="px-1 py-2 text-[11px] text-gray-500">
+                显示最近 {syncHistory.length} 条记录
+              </div>
+            </>
+          )}
         </div>
       </section>
     </main>

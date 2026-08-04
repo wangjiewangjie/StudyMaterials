@@ -10,6 +10,10 @@
  * ============================================================ */
 
 /* ===== base ===== */
+/* 全局 border-box：preflight 被禁用，需手动声明，否则 w-full + px-* 会溢出可视窗口 */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
 html, body {
   margin: 0;
   padding: 0;
@@ -44,7 +48,7 @@ html, body {
 ::-webkit-scrollbar-track { background: #0a0a0a; }
 ::-webkit-scrollbar-thumb {
   background: #222225;
-  border-radius: 3px;
+  border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover { background: #FF9900; }
 
@@ -115,7 +119,7 @@ html, body {
   animation: shimmer-bg 2s linear infinite;
 }
 .sync-log-box::-webkit-scrollbar { width: 4px; height: 4px; }
-.sync-log-box::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
+.sync-log-box::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 8px; }
 .sync-modal-card .ant-modal-content {
   background: transparent !important;
   border: none !important;
@@ -150,7 +154,7 @@ html, body {
 :focus-visible {
   outline: 2px solid rgba(255, 153, 0, .6);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 8px;
 }
 
 /* ===== Line Clamp ===== */
@@ -190,7 +194,7 @@ html, body {
 .player-modal .ant-modal-content {
   background: #0f0f10;
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 16px;
+  border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 28px 72px rgba(0, 0, 0, .75);
 }
@@ -206,7 +210,7 @@ html, body {
 
 /* 通用 Modal */
 .ant-modal .ant-modal-content {
-  border-radius: 16px;
+  border-radius: 8px;
   background: #121213;
   border: 1px solid rgba(255,255,255,0.08);
   box-shadow: 0 28px 72px rgba(0, 0, 0, .75);
@@ -287,7 +291,7 @@ html, body {
 
 /* Tag */
 .ant-tag {
-  border-radius: 6px;
+  border-radius: 8px;
   background: #1a1a1e !important;
   border-color: rgba(255,255,255,0.08) !important;
   color: #bbbbbb !important;
@@ -308,20 +312,20 @@ html, body {
 
 /* Card */
 .ant-card {
-  border-radius: 16px;
+  border-radius: 8px;
   background: #121212 !important;
   border: 1px solid rgba(255,255,255,0.05) !important;
 }
 .ant-card:hover {
   border-color: rgba(255, 153, 0, .35) !important;
 }
-.ant-card-body { padding: 0 !important; }
+.ant-card-body { padding: 0 !important; border-radius: 8px; overflow: hidden; }
 
 /* Popover */
 .ant-popover .ant-popover-inner {
   background: #141416;
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 10px 32px rgba(0, 0, 0, .65);
 }
 .ant-popover .ant-popover-title {
@@ -336,11 +340,11 @@ html, body {
 .ant-select-dropdown {
   background: #141416 !important;
   border: 1px solid rgba(255,255,255,0.08) !important;
-  border-radius: 12px !important;
+  border-radius: 8px !important;
   box-shadow: 0 10px 32px rgba(0, 0, 0, .65) !important;
 }
 .ant-select-dropdown .ant-select-item {
-  border-radius: 6px;
+  border-radius: 8px;
   color: #cccccc !important;
 }
 .ant-select-dropdown .ant-select-item-option-active {
@@ -452,7 +456,7 @@ html, body {
   width: 42px;
   height: 42px;
   border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 12px;
+  border-radius: 8px;
   background: rgba(18, 18, 18, 0.92);
   color: #FF9900;
   cursor: pointer;
@@ -484,76 +488,6 @@ html, body {
 }
 
 /* ============================================================
- * Artplayer 主题覆盖 (Cinema Dark Theme)
- * ============================================================ */
-.artplayer-app {
-  width: 100%;
-  background: #000;
-  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
-}
-/* 控制栏背景加深 */
-.artplayer-app .art-bottom {
-  background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.85) 100%) !important;
-  padding-bottom: 6px;
-}
-/* 进度条：橙色主题 */
-.artplayer-app .art-progress,
-.artplayer-app .art-progress-loaded,
-.artplayer-app .art-progress-played {
-  background: rgba(255, 255, 255, 0.12);
-}
-.artplayer-app .art-progress-played {
-  background: #FF9900 !important;
-}
-.artplayer-app .art-progress-loaded {
-  background: rgba(255, 255, 255, 0.25) !important;
-}
-.artplayer-app .art-progress-tip {
-  background: rgba(0, 0, 0, 0.85);
-  border-radius: 4px;
-  color: #fff;
-}
-.artplayer-app .art-progress-handler {
-  background: #FF9900 !important;
-  border: 2px solid #fff;
-  box-shadow: 0 0 8px rgba(255, 153, 0, 0.6);
-}
-/* 控制按钮颜色 */
-.artplayer-app .art-controls,
-.artplayer-app .art-control {
-  color: rgba(255, 255, 255, 0.85);
-}
-.artplayer-app .art-control:hover {
-  color: #FF9900;
-}
-/* 设置面板 */
-.artplayer-app .art-setting {
-  background: rgba(18, 18, 20, 0.96) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-.artplayer-app .art-setting-item:hover {
-  background: rgba(255, 153, 0, 0.12);
-  color: #FF9900;
-}
-/* 通知条 */
-.artplayer-app .art-notice {
-  background: rgba(0, 0, 0, 0.7) !important;
-  border-radius: 6px;
-  color: #fff;
-}
-/* 加载图标 */
-.artplayer-app .art-loading {
-  display: none;
-}
-/* 标题区遮罩 */
-.artplayer-app .art-mask {
-  background: rgba(0, 0, 0, 0.4);
-}
-
-/* ============================================================
  * 移动端深度适配
  * ============================================================ */
 
@@ -569,23 +503,7 @@ html, body {
   }
 }
 
-/* 移动端 Artplayer 控件调整：增大触控热区 */
 @media (max-width: 720px) {
-  .artplayer-app .art-bottom {
-    padding: 8px 10px 6px;
-  }
-  .artplayer-app .art-control {
-    min-width: 36px;
-    min-height: 36px;
-    font-size: 16px;
-  }
-  .artplayer-app .art-progress {
-    height: 4px;
-  }
-  .artplayer-app .art-progress-handler {
-    width: 12px;
-    height: 12px;
-  }
   /* 详情页元信息四宫格：移动端单列堆叠 */
   .detail-meta-grid > .ant-col {
     flex: 0 0 50% !important;
@@ -594,13 +512,6 @@ html, body {
   /* 视频卡片间距收紧 */
   .video-grid-mobile [class*="ant-col"] {
     padding-inline: 4px !important;
-  }
-}
-
-/* 横屏移动端：限制播放器最大高度，保留控制栏可见 */
-@media (max-width: 900px) and (orientation: landscape) {
-  .artplayer-app {
-    max-height: 85vh;
   }
 }
 
