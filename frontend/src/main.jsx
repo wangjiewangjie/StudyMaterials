@@ -5,8 +5,9 @@ import zhCN from 'antd/locale/zh_CN';
 import App from './App.jsx';
 import './index.css';
 
-// Orange accent matching the original "学习资料" brand color.
-const ORANGE = '#ff9000';
+// Cinema Dark Theme — 琥珀橙主色 #FF9900 + 纯黑影院级背景
+const ORANGE = '#FF9900';
+const ORANGE_LIGHT = '#ffaa22';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -16,33 +17,102 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         algorithm: antdTheme.darkAlgorithm,
         token: {
           colorPrimary: ORANGE,
-          colorBgBase: '#1b1b1b',
-          colorBgContainer: '#232323',
-          colorBgElevated: '#262626',
-          colorBorder: '#3a3a3a',
-          colorBorderSecondary: '#2a2a2a',
-          borderRadius: 6,
+          colorPrimaryHover: ORANGE_LIGHT,
+          colorPrimaryActive: '#e68a00',
+          colorBgBase: '#050505',
+          colorBgContainer: '#141416',
+          colorBgElevated: '#1A1A1A',
+          colorBgLayout: '#050505',
+          colorBorder: 'rgba(255,255,255,0.10)',
+          colorBorderSecondary: 'rgba(255,255,255,0.05)',
+          colorSplit: 'rgba(255,255,255,0.06)',
+          borderRadius: 8,
+          borderRadiusLG: 12,
+          borderRadiusSM: 6,
+          borderRadiusXS: 4,
           colorLink: ORANGE,
+          colorLinkHover: ORANGE_LIGHT,
+          colorText: '#e6e6e6',
+          colorTextSecondary: '#cccccc',
+          colorTextTertiary: '#999999',
+          colorTextQuaternary: '#666666',
+          colorInfo: ORANGE,
+          colorInfoBg: 'rgba(255, 153, 0, 0.10)',
+          colorInfoBorder: 'rgba(255, 153, 0, 0.30)',
         },
         components: {
           Layout: {
-            headerBg: '#000000',
-            bodyBg: '#1b1b1b',
-            headerHeight: 56,
+            headerBg: '#0A0A0A',
+            bodyBg: '#050505',
+            headerHeight: 64,
             headerPadding: '0 22px',
+            headerColor: '#ffffff',
           },
           Card: {
-            colorBgContainer: '#232323',
+            colorBgContainer: '#121212',
             headerBg: 'transparent',
+            colorBorderSecondary: 'rgba(255,255,255,0.05)',
+            actionsBg: 'transparent',
           },
           Modal: {
-            contentBg: '#1b1b1b',
-            headerBg: '#1b1b1b',
+            contentBg: '#121213',
+            headerBg: 'transparent',
             titleColor: '#ffffff',
+            colorBorderSecondary: 'rgba(255,255,255,0.06)',
           },
-          Tag: { defaultBg: '#2a2a2a' },
-          Input: { colorBgContainer: '#1b1b1b' },
-          Menu: { itemBg: '#000000' },
+          Tag: {
+            defaultBg: '#1a1a1e',
+            defaultColor: '#bbbbbb',
+          },
+          Input: {
+            colorBgContainer: '#141416',
+            colorBorder: 'rgba(255,255,255,0.10)',
+            activeBorderShadow: '0 0 0 2px rgba(255, 153, 0, 0.12)',
+            hoverBorderColor: 'rgba(255, 153, 0, 0.45)',
+            activeBorderColor: 'rgba(255, 153, 0, 0.55)',
+          },
+          InputNumber: {
+            colorBgContainer: '#141416',
+            colorBorder: 'rgba(255,255,255,0.10)',
+          },
+          Button: {
+            colorPrimary: ORANGE,
+            colorPrimaryHover: ORANGE_LIGHT,
+            colorPrimaryActive: '#e68a00',
+            colorBgContainer: '#1a1a1e',
+            colorBorder: 'rgba(255,255,255,0.10)',
+            defaultBg: '#1a1a1e',
+          },
+          Select: {
+            colorBgContainer: '#1a1a1e',
+            colorBorder: 'rgba(255,255,255,0.10)',
+            optionSelectedBg: 'rgba(255, 153, 0, 0.15)',
+            optionSelectedColor: ORANGE,
+            colorBgElevated: '#141416',
+          },
+          Switch: {
+            colorPrimary: ORANGE,
+          },
+          Dropdown: {
+            colorBgElevated: '#141416',
+            colorBorderSecondary: 'rgba(255,255,255,0.08)',
+          },
+          Popover: {
+            colorBgElevated: '#141416',
+            colorBorderSecondary: 'rgba(255,255,255,0.08)',
+          },
+          Pagination: {
+            colorBgContainer: '#1a1a1e',
+            colorBorder: 'rgba(255,255,255,0.08)',
+            colorPrimary: ORANGE,
+            itemActiveBg: ORANGE,
+          },
+          Tooltip: {
+            colorBgDefault: '#141416',
+          },
+          Empty: {
+            colorTextDescription: '#777777',
+          },
         },
       }}
     >

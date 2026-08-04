@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Spin, Button, Result } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
+import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 
 function unwrapCdnProxyUrl(url, maxDepth = 8) {
@@ -168,9 +169,96 @@ function friendlyHlsError(data) {
   return details || (data && data.type) || '未知错误';
 }
 
+// 构造 Artplayer 实例：使用 HLS.js 作为自定义播放器，沿用原 ProxyLoader 处理跨域
+function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
+  const canNativeHls = video.canPlayType('application/vnd.apple.mpegurl');
+
+  const art = new Artplayer({
+    container,
+    url: m3u8Url,
+    type: 'm3u8',
+    poster: '',
+    volume: 0.7,
+    autoplay: true,
+    autoSize: false,
+    autoMini: false,
+    loop: false,
+    flip: true,
+    playbackRate: true,
+    aspectRatio: true,
+    fullscreen: true,
+    fullscreenWeb: true,
+    miniProgressBar: true,
+    mutex: true,
+    backdrop: true,
+    playsInline: true,
+    autoPlayback: false,
+    airplay: true,
+    theme: '#FF9900',
+    lang: 'zh-cn',
+    setting: true,
+    hotkey: true,
+    pip: true,
+    fastForward: true,
+    screenshot: true,
+    // 自定义 HLS 处理
+    customType: {
+      m3u8: function (video, url) {
+        if (Hls.isSupported()) {
+          const hls = new Hls({
+            loader: ProxyLoader,
+            enableWorker: true,
+            ...HLS_TIMEOUTS,
+          });
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            onReady && onReady();
+          });
+          hls.on(Hls.Events.ERROR, (_e, data) => {
+            if (data && data.fatal) {
+              logPlayer('fatal HLS error', {
+                fatal: true,
+                type: data.type,
+                details: data.details,
+                url: data.url,
+              });
+              if (data.type === 'networkError') {
+                hls.startLoad();
+                return;
+              }
+              if (data.type === 'mediaError') {
+                try {
+                  hls.recoverMediaError();
+                  return;
+                } catch (e) {
+                  logPlayer('media recovery failed', e);
+                }
+              }
+              onError && onError(friendlyHlsError(data));
+            } else {
+              console.warn('[VideoPlayer] non-fatal HLS error', data && data.details);
+            }
+          });
+          // 存储 hls 实例便于销毁
+          art.hls = hls;
+        } else if (canNativeHls) {
+          video.src = proxyUrl(url);
+          onReady && onReady();
+        } else {
+          logPlayer('HLS unsupported in this browser');
+          onError && onError('当前浏览器不支持此视频格式，请换用 Chrome / Edge');
+        }
+      },
+    },
+  });
+
+  return art;
+}
+
 export default function VideoPlayer({ item, onTags }) {
-  const videoRef = useRef(null);
-  const hlsRef = useRef(null);
+  const containerRef = useRef(null);
+  const artRef = useRef(null);
   const onTagsRef = useRef(onTags);
   const loadGenRef = useRef(0);
 
@@ -182,14 +270,19 @@ export default function VideoPlayer({ item, onTags }) {
   onTagsRef.current = onTags;
 
   const loadSource = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video) return;
+    const container = containerRef.current;
+    if (!container) return;
 
     const gen = ++loadGenRef.current;
 
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
+    // 销毁旧的 Artplayer 实例
+    if (artRef.current) {
+      try {
+        artRef.current.destroy(false);
+      } catch (e) {
+        logPlayer('destroy failed', e);
+      }
+      artRef.current = null;
     }
 
     setPhase('loading');
@@ -202,7 +295,7 @@ export default function VideoPlayer({ item, onTags }) {
       return;
     }
 
-    // Refresh the m3u8 URL (auth keys expire) and pick up tags/date updates.
+    // 刷新 m3u8 URL（鉴权 key 可能已过期），同时获取最新标签/日期
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 60000);
@@ -236,66 +329,40 @@ export default function VideoPlayer({ item, onTags }) {
     if (gen !== loadGenRef.current) return;
     setLoadingTip('正在加载视频流…');
 
-    if (Hls.isSupported()) {
-      const hls = new Hls({
-        loader: ProxyLoader,
-        enableWorker: true,
-        ...HLS_TIMEOUTS,
-      });
-      hlsRef.current = hls;
-      hls.loadSource(m3u8Url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (gen !== loadGenRef.current) return;
-        setPhase('ready');
-        video.play().catch((e) => logPlayer('autoplay blocked', e && e.message));
-      });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (gen !== loadGenRef.current) return;
-        const payload = {
-          id: item.id,
-          fatal: !!(data && data.fatal),
-          type: data && data.type,
-          details: data && data.details,
-          url: data && data.url,
-          response: data && data.response && {
-            code: data.response.code,
-            text: data.response.text,
-          },
-          error: data && data.error && (data.error.message || String(data.error)),
-          frag: data && data.frag && data.frag.url,
-        };
-        if (data && data.fatal) {
-          logPlayer('fatal HLS error', payload);
-          // Try a one-shot network/media recovery before surfacing UI error.
-          if (data.type === 'networkError') {
-            logPlayer('attempting network recovery');
-            hls.startLoad();
-            return;
+    // 临时清空容器，重新创建 Artplayer
+    container.innerHTML = '';
+
+    const video = document.createElement('video');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+
+    try {
+      const art = createArtplayer({
+        container,
+        video,
+        m3u8Url,
+        onReady: () => {
+          if (gen !== loadGenRef.current) return;
+          setPhase('ready');
+          // 自动播放
+          try {
+            art.play().catch((e) => logPlayer('autoplay blocked', e && e.message));
+          } catch (e) {
+            logPlayer('autoplay failed', e);
           }
-          if (data.type === 'mediaError') {
-            logPlayer('attempting media recovery');
-            try {
-              hls.recoverMediaError();
-              return;
-            } catch (e) {
-              logPlayer('media recovery failed', e);
-            }
-          }
-          setErrorMsg(friendlyHlsError(data));
+        },
+        onError: (msg) => {
+          if (gen !== loadGenRef.current) return;
+          setErrorMsg(msg || '播放失败');
           setPhase('error');
-        } else {
-          // Non-fatal: still log — timeouts/retries show up here first.
-          console.warn('[VideoPlayer] non-fatal HLS error', payload);
-        }
+        },
       });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = proxyUrl(m3u8Url);
-      setPhase('ready');
-    } else {
-      logPlayer('HLS unsupported in this browser');
+      artRef.current = art;
+    } catch (e) {
+      logPlayer('artplayer init failed', e);
+      if (gen !== loadGenRef.current) return;
+      setErrorMsg('播放器初始化失败');
       setPhase('error');
-      setErrorMsg('当前浏览器不支持此视频格式，请换用 Chrome / Edge');
     }
   }, [item.id, item.video]);
 
@@ -303,9 +370,13 @@ export default function VideoPlayer({ item, onTags }) {
     loadSource();
     return () => {
       loadGenRef.current++;
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
+      if (artRef.current) {
+        try {
+          artRef.current.destroy(false);
+        } catch (e) {
+          logPlayer('cleanup destroy failed', e);
+        }
+        artRef.current = null;
       }
     };
   }, [loadSource]);
@@ -313,18 +384,24 @@ export default function VideoPlayer({ item, onTags }) {
   const retry = useCallback(() => { loadSource(); }, [loadSource]);
 
   return (
-    <div className="relative bg-black">
-      <video
-        ref={videoRef}
-        className="w-full block bg-black"
-        style={{ maxHeight: '78vh' }}
-        controls
-        playsInline
-        poster={posterUrl || undefined}
+    <div className="relative bg-black w-full">
+      {/* Artplayer 容器 */}
+      <div
+        ref={containerRef}
+        className="artplayer-app w-full"
+        style={{ aspectRatio: '16/9', maxHeight: '78vh' }}
       />
 
+      {/* 海报作为加载背景 */}
+      {phase === 'loading' && posterUrl && (
+        <div
+          className="v-overlay absolute inset-0 z-[6] bg-black/60 bg-center bg-cover"
+          style={{ backgroundImage: `url(${posterUrl})` }}
+        />
+      )}
+
       {phase === 'loading' && (
-        <div className="v-overlay absolute inset-0 z-[6] flex items-center justify-center bg-black/60">
+        <div className="v-overlay absolute inset-0 z-[7] flex items-center justify-center bg-black/40 pointer-events-none">
           <Spin size="large" tip={loadingTip} />
         </div>
       )}

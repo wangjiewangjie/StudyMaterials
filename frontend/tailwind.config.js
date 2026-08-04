@@ -7,23 +7,37 @@ export default {
     extend: {
       colors: {
         ph: {
-          orange: '#ff9000',
-          'orange-light': '#ffa026',
-          bg: '#1b1b1b',
-          header: '#000000',
-          card: '#232323',
-          elevated: '#262626',
-          border: '#2a2a2a',
-          'border-light': '#3a3a3a',
+          orange: '#FF9900',
+          'orange-light': '#ffaa22',
+          bg: '#050505',
+          header: '#0A0A0A',
+          card: '#121212',
+          elevated: '#1A1A1A',
+          panel: '#141416',
+          panelAlt: '#1a1a1e',
+          border: 'rgba(255,255,255,0.10)',
+          'border-light': 'rgba(255,255,255,0.05)',
           'text-primary': '#e6e6e6',
-          'text-secondary': '#ccc',
-          'text-tertiary': '#999',
-          'text-muted': '#777',
+          'text-secondary': '#cccccc',
+          'text-tertiary': '#999999',
+          'text-muted': '#777777',
         },
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
+        // 英文/数字: Segoe UI 高级影视平台感；中文回退到微软雅黑
+        sans: ['Segoe UI', 'Microsoft YaHei', 'sans-serif'],
+        // 仅保留给代码/日志/URL 等真正需要等宽的场景
         mono: ['Consolas', 'Courier New', 'monospace'],
+      },
+      animation: {
+        'fade-in': 'fadeIn 0.2s ease-out',
+        'spin-slow': 'spin 2s linear infinite',
+      },
+      keyframes: {
+        fadeIn: {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
       },
     },
   },

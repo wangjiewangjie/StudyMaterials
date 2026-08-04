@@ -1,1418 +1,308 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { App as AntdApp, Drawer, Button } from 'antd';
 import {
-  Layout, Input, Button, Card, Tag, Modal, Empty, Spin, Typography,
-  Space, Popover, InputNumber, Pagination, App as AntdApp, Tooltip, Dropdown, Select, Switch,
-} from 'antd';
-import {
-  SearchOutlined, SyncOutlined, LinkOutlined,
-  VideoCameraOutlined, InboxOutlined, GlobalOutlined,
-  CalendarOutlined, ClearOutlined, ReloadOutlined,
-  StarOutlined, StarFilled, DownloadOutlined, PlayCircleFilled,
-  CopyOutlined, VerticalAlignTopOutlined, CloseOutlined, TagsOutlined,
-  ReadOutlined, SettingOutlined, PlusOutlined, DeleteOutlined,
+  HeartOutlined, HeartFilled, FileTextOutlined, SyncOutlined,
 } from '@ant-design/icons';
-import VideoPlayer from './VideoPlayer.jsx';
+import AppHeader from './components/AppHeader.jsx';
+import SyncModal from './components/SyncModal.jsx';
+import HomeView from './views/HomeView.jsx';
+import DetailView from './views/DetailView.jsx';
+import FavoritesView from './views/FavoritesView.jsx';
+import SyncCenterView from './views/SyncCenterView.jsx';
+import { useAppData } from './hooks/useAppData.js';
+import { useSync } from './hooks/useSync.js';
+import { downloadFavorites } from './services/api.js';
 
-const { Header, Content } = Layout;
-const { Text } = Typography;
-
-// 站点名称映射：默认值与 crawler.js 的 DEFAULT_SITE_CONFIGS 一致，
-// App 加载 /api/sites 后会用配置里的 name 覆盖（hostname -> name）。
-const SITE_NAMES = {
-  'bite.ygvttlxzy.cc': '91吃瓜',
-  'd1ve8vvwughzqa.cloudfront.net': '91视频',
-  'breast.eiejvjgex.cc': '51fans',
-  'assert.pbtiodqn.cc': '51爆料',
+// 视图路由常量
+const VIEW = {
+  HOME: 'home',
+  DETAIL: 'detail',
+  FAVORITES: 'favorites',
+  SYNC_CENTER: 'sync_center',
 };
-let SITE_NAME_MAP = { ...SITE_NAMES };
-function setSiteNameMap(configs) {
-  const map = { ...SITE_NAMES };
-  (configs || []).forEach((s) => {
-    if (!s || !s.url) return;
-    try { map[new URL(s.url).hostname] = s.name || map[new URL(s.url).hostname]; } catch (_) {}
-  });
-  SITE_NAME_MAP = map;
-}
 
-const PAGE_SIZE = 60;
-
-function siteLabel(siteUrl) {
-  if (!siteUrl) return '未知来源';
-  try {
-    const host = new URL(siteUrl).hostname;
-    return SITE_NAME_MAP[host] || host.split('.')[0];
-  } catch (_) {
-    return String(siteUrl);
-  }
-}
-
-function formatDate(iso) {
-  if (!iso) return '';
-  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
-}
-
-// 通用 POST JSON 请求辅助函数
-async function postJSON(url, body) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return res.json();
-}
-
-function SkeletonGrid({ count = 12 }) {
-  return (
-    <div className="grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-      {Array.from({ length: count }, (_, i) => (
-        <div
-          key={i}
-          className="overflow-hidden rounded-lg border border-ph-border bg-ph-card rise-in"
-          style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
-        >
-          <div className="skel w-full" style={{ aspectRatio: '16/9' }} />
-          <div className="p-2.5 space-y-2">
-            <div className="skel h-3.5 w-[92%] rounded-sm" />
-            <div className="skel h-3.5 w-[64%] rounded-sm" />
-            <div className="flex gap-2 mt-2">
-              <div className="skel h-3 w-12 rounded-sm" />
-              <div className="skel h-3 w-16 rounded-sm" />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const VideoCard = memo(function VideoCard({ item, onClick, favorited, onToggleFavorite, index = 0 }) {
-  const thumb = item.coverUrl ? `/api/cover/${item.id}` : '';
-  const hasVideo = !!(item.video && item.video.url);
-  const [imgOk, setImgOk] = useState(!!thumb);
-
-  const handleClick = useCallback(() => onClick(item), [item, onClick]);
-  const handleFav = useCallback((e) => {
-    e.stopPropagation();
-    onToggleFavorite && onToggleFavorite(item);
-  }, [item, onToggleFavorite]);
-  const handleKey = useCallback((e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onClick(item);
-    }
-  }, [item, onClick]);
-
-  return (
-    <Card
-      hoverable
-      size="small"
-      role="button"
-      tabIndex={0}
-      aria-label={(item.title || `条目 ${item.id}`) + (hasVideo ? '，可播放' : '，无法播放')}
-      className="group overflow-hidden !bg-ph-card !border-ph-border transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-[4px] hover:!border-ph-orange/70 hover:shadow-[0_10px_28px_rgba(0,0,0,.45),0_0_0_1px_rgba(255,144,0,.15)] focus-visible:!border-ph-orange focus-visible:outline-none rise-in"
-      style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
-      styles={{ body: { padding: 0 } }}
-      onClick={handleClick}
-      onKeyDown={handleKey}
-    >
-      <div className="relative w-full overflow-hidden bg-black" style={{ aspectRatio: '16/9' }}>
-        {thumb && imgOk ? (
-          <img
-            src={thumb}
-            alt=""
-            loading="lazy"
-            className="w-full h-full object-cover block transition-transform duration-[400ms] ease-out group-hover:scale-[1.08]"
-            onError={() => setImgOk(false)}
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-ph-text-tertiary bg-gradient-to-br from-[#1a1a1a] to-[#2a2a2a]">
-            <VideoCameraOutlined style={{ fontSize: 32 }} />
-          </div>
-        )}
-
-        <span className="absolute top-1.5 left-1.5 bg-black/70 backdrop-blur-sm text-white text-[11px] font-semibold px-1.5 py-0.5 rounded flex items-center gap-1 shadow-sm border border-white/5">
-          <GlobalOutlined className="text-ph-orange" style={{ fontSize: 10 }} />
-          {siteLabel(item.siteUrl)}
-        </span>
-
-        <button
-          type="button"
-          title={favorited ? '取消收藏' : '加入收藏'}
-          aria-label={favorited ? '取消收藏' : '加入收藏'}
-          onClick={handleFav}
-          className="absolute top-1.5 right-1.5 z-[2] w-8 h-8 rounded-full bg-black/65 hover:bg-black/90 backdrop-blur-sm border-0 cursor-pointer flex items-center justify-center text-base transition-all hover:scale-110"
-        >
-          {favorited
-            ? <StarFilled style={{ color: '#ff9000' }} />
-            : <StarOutlined style={{ color: '#fff' }} />}
-        </button>
-
-        {hasVideo && (
-          <span className="card-play absolute inset-0 z-[1] flex items-center justify-center pointer-events-none">
-            <span className="w-14 h-14 rounded-full bg-black/55 text-ph-orange flex items-center justify-center text-[40px] shadow-[0_4px_20px_rgba(0,0,0,.5)] backdrop-blur-[3px] border border-ph-orange/30">
-              <PlayCircleFilled />
-            </span>
-          </span>
-        )}
-
-        <span className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
-
-        {hasVideo ? (
-          <span className="absolute bottom-1.5 right-1.5 bg-black/80 text-ph-orange text-[12px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
-            <VideoCameraOutlined style={{ fontSize: 11 }} />
-          </span>
-        ) : (
-          <span className="absolute bottom-1.5 right-1.5 bg-zinc-800/90 text-zinc-400 text-[11px] font-semibold px-1.5 py-0.5 rounded">
-            无法播放
-          </span>
-        )}
-      </div>
-      <div className="p-2.5">
-        <div className="line-clamp-2 text-[13px] leading-[1.5] text-ph-text-primary font-semibold min-h-[39px] group-hover:text-ph-orange/95 transition-colors">
-          {item.title || `条目 ${item.id}`}
-        </div>
-        <div className="flex gap-2 items-center text-[11px] text-ph-text-muted mt-1.5 flex-wrap">
-          {item.category && (
-            <span className="text-ph-orange font-semibold bg-ph-orange/10 px-1.5 py-0.5 rounded">
-              {item.category}
-            </span>
-          )}
-          {item.datePublished && (
-            <span className="inline-flex items-center gap-0.5">
-              <CalendarOutlined style={{ fontSize: 10 }} />
-              {formatDate(item.datePublished)}
-            </span>
-          )}
-        </div>
-      </div>
-    </Card>
-  );
-});
-
-function PlayerModal({ item, onClose, onTagClick, favorited, onToggleFavorite }) {
-  const { message } = AntdApp.useApp();
-  const [tags, setTags] = useState(item.tags || []);
-  const [category, setCategory] = useState(item.category || null);
-  const [datePublished, setDatePublished] = useState(item.datePublished || null);
-
-  useEffect(() => {
-    setTags(item.tags || []);
-    setCategory(item.category || null);
-    setDatePublished(item.datePublished || null);
-  }, [item]);
-
-  const handleTags = useCallback((newTags, newCategory, newDate) => {
-    if (newTags && newTags.length) setTags(newTags);
-    if (newCategory) setCategory(newCategory);
-    if (newDate) setDatePublished(newDate);
-  }, []);
-
-  const copyVideoUrl = useCallback(async () => {
-    const url = item.video && item.video.url;
-    if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
-      message.success('已复制视频地址');
-    } catch (_) {
-      message.info('无法自动复制，请从「视频地址」打开');
-    }
-  }, [item, message]);
-
-  const hasVideo = !!(item.video && item.video.url);
-  return (
-    <Modal
-      open={!!item}
-      onCancel={onClose}
-      footer={null}
-      width={Math.min(1000, typeof window !== 'undefined' ? window.innerWidth - 32 : 1000)}
-      destroyOnClose
-      centered
-      title={
-        <div className="flex items-start gap-3 pr-2">
-          <span className="flex-1 min-w-0 line-clamp-2 text-[15px] font-semibold leading-[1.4]">
-            {item.title || `条目 ${item.id}`}
-          </span>
-          <Tooltip title={favorited ? '取消收藏' : '加入收藏'}>
-            <Button
-              type="text"
-              size="small"
-              className="!shrink-0 !w-8 !h-8 !rounded-full hover:!bg-ph-orange/15"
-              icon={favorited ? <StarFilled style={{ color: '#ff9000' }} /> : <StarOutlined />}
-              onClick={() => onToggleFavorite && onToggleFavorite(item)}
-              aria-label={favorited ? '取消收藏' : '加入收藏'}
-            />
-          </Tooltip>
-        </div>
-      }
-      className="player-modal"
-    >
-      {hasVideo ? (
-        <VideoPlayer item={item} onTags={handleTags} />
-      ) : (
-        <div className="flex flex-col items-center justify-center gap-3 py-20 text-center px-6 bg-gradient-to-b from-ph-card to-ph-bg">
-          <span className="flex items-center justify-center w-16 h-16 rounded-full bg-ph-orange/10 border border-ph-orange/20 text-ph-orange">
-            <InboxOutlined style={{ fontSize: 30 }} />
-          </span>
-          <Text className="!text-ph-text-primary text-base font-semibold">暂时无法播放</Text>
-          <Text type="secondary" className="text-xs max-w-sm">
-            来源「{siteLabel(item.siteUrl)}」可能未提供可用地址，可打开原文查看。
-          </Text>
-        </div>
-      )}
-      <div className="px-[18px] pb-4 pt-3.5">
-        {(datePublished || item.siteUrl) && (
-          <div className="flex gap-4 items-center text-[12px] text-ph-text-muted mb-2.5 flex-wrap">
-            {datePublished && (
-              <span className="inline-flex items-center gap-1 bg-ph-bg/60 border border-ph-border px-2 py-0.5 rounded">
-                <CalendarOutlined className="text-ph-orange" style={{ fontSize: 11 }} />
-                {formatDate(datePublished)}
-              </span>
-            )}
-            {item.siteUrl && (
-              <span className="inline-flex items-center gap-1 bg-ph-bg/60 border border-ph-border px-2 py-0.5 rounded">
-                <GlobalOutlined className="text-ph-orange" style={{ fontSize: 11 }} />
-                {siteLabel(item.siteUrl)}
-              </span>
-            )}
-          </div>
-        )}
-        {(category || tags.length > 0) && (
-          <div className="mb-1">
-            <Text type="secondary" className="text-[11px] block mb-1.5 inline-flex items-center gap-1">
-              <TagsOutlined style={{ fontSize: 10 }} />
-              点击标签可搜索相关内容
-            </Text>
-            <Space size={[6, 6]} wrap>
-              {category && (
-                <Tooltip title={`搜索「${category}」`}>
-                  <Tag color="orange" className="cursor-pointer !m-0 !rounded" onClick={() => onTagClick && onTagClick(category)}>
-                    {category}
-                  </Tag>
-                </Tooltip>
-              )}
-              {tags.map((t) => (
-                <Tooltip key={t} title={`搜索「${t}」`}>
-                  <Tag className="cursor-pointer !m-0 !rounded hover:!border-ph-orange/60 hover:!text-ph-orange transition-colors" onClick={() => onTagClick && onTagClick(t)}>
-                    {t}
-                  </Tag>
-                </Tooltip>
-              ))}
-            </Space>
-          </div>
-        )}
-        <div className="flex gap-2 flex-wrap mt-3 pt-3 border-t border-ph-border/60">
-          {item.url && (
-            <Button size="small" icon={<LinkOutlined />} href={item.url} target="_blank" rel="noreferrer">
-              打开原文
-            </Button>
-          )}
-          {hasVideo && (
-            <>
-              <Tooltip title="复制 m3u8 地址到剪贴板">
-                <Button size="small" icon={<CopyOutlined />} onClick={copyVideoUrl}>
-                  复制地址
-                </Button>
-              </Tooltip>
-              <Tooltip title="在新标签打开原始地址">
-                <Button size="small" icon={<VideoCameraOutlined />} href={item.video.url} target="_blank" rel="noreferrer">
-                  视频地址
-                </Button>
-              </Tooltip>
-            </>
-          )}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-/** Unified sync panel: own keyword field (independent from local search). */
-function SyncPanel({ onSync, syncing, logs, status, open: openProp, onOpenChange, initialKeyword }) {
-  const [pageStart, setPageStart] = useState(1);
-  const [pageEnd, setPageEnd] = useState(1);
-  const [keyword, setKeyword] = useState(initialKeyword || '');
-  const [openLocal, setOpenLocal] = useState(false);
-  const logRef = useRef(null);
-  const progressLogRef = useRef(null);
-
-  const open = openProp !== undefined ? openProp : openLocal;
-  const setOpen = onOpenChange || setOpenLocal;
-
-  const kw = keyword.trim();
-  const keywords = kw ? kw.split(/[,，]/).map((k) => k.trim()).filter((k) => k) : [];
-  const isSearch = keywords.length > 0;
-  const isMultiTag = keywords.length > 1;
-
-  useEffect(() => {
-    if (open && initialKeyword) setKeyword(initialKeyword);
-  }, [open, initialKeyword]);
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
-
-  useEffect(() => {
-    if (progressLogRef.current) progressLogRef.current.scrollTop = progressLogRef.current.scrollHeight;
-  }, [logs, syncing]);
-
-  const start = () => {
-    const a = Math.min(pageStart, pageEnd);
-    const b = Math.max(pageStart, pageEnd);
-    if (a !== pageStart || b !== pageEnd) {
-      setPageStart(a);
-      setPageEnd(b);
-    }
-    if (isMultiTag) {
-      // 多标签并行同步
-      onSync({
-        tags: keywords,
-        pages: b - a + 1,
-        pageStart: a,
-        pageEnd: b,
-      });
-    } else {
-      onSync({
-        keyword: keywords[0] || null,
-        pageStart: a,
-        pageEnd: b,
-        pages: isSearch ? (b - a + 1) : undefined,
-      });
-    }
-  };
-
-  const formContent = (
-    <div className="w-[340px]">
-      <Text type="secondary" className="text-[12px] block mb-3 leading-relaxed">
-        {isMultiTag
-          ? `将按 ${keywords.length} 个关键词并行搜索同步: ${keywords.slice(0, 3).join('、')}${keywords.length > 3 ? '...' : ''}`
-          : isSearch
-            ? `将按关键词「${keywords[0]}」在各站点搜索并同步到本地。`
-            : '未填关键词时，抓取各站「今日」与列表页，刷新本地资料库。'}
-        <span className="block mt-1.5 opacity-80">支持逗号分隔多关键词（如: 标签1,标签2,标签3），开始后可继续浏览与本地搜索。</span>
-      </Text>
-      <div className="mb-3">
-        <Text type="secondary" className="text-[12px] block mb-1">同步关键词（选填，逗号分隔支持多标签）</Text>
-        <Input
-          size="small"
-          allowClear
-          placeholder="填写则全网搜索同步，多个标签用逗号分隔"
-          value={keyword}
-          disabled={syncing}
-          onChange={(e) => setKeyword(e.target.value)}
-          onPressEnter={start}
-        />
-      </div>
-      <div className="flex items-center gap-2 mb-3">
-        <Text type="secondary" className="whitespace-nowrap">
-          {isSearch ? '搜索页数' : '列表页码'}
-        </Text>
-        {isSearch ? (
-          <InputNumber
-            size="small"
-            min={1}
-            max={10}
-            value={pageEnd - pageStart + 1}
-            disabled={syncing}
-            onChange={(v) => {
-              const n = Math.max(1, Math.min(10, v || 1));
-              setPageStart(1);
-              setPageEnd(n);
-            }}
-          />
-        ) : (
-          <>
-            <InputNumber
-              size="small"
-              min={1}
-              max={99}
-              value={pageStart}
-              onChange={(v) => setPageStart(v || 1)}
-              disabled={syncing}
-            />
-            <Text type="secondary">至</Text>
-            <InputNumber
-              size="small"
-              min={1}
-              max={99}
-              value={pageEnd}
-              onChange={(v) => setPageEnd(v || 1)}
-              disabled={syncing}
-            />
-          </>
-        )}
-      </div>
-      <Button type="primary" size="small" block loading={syncing} icon={<SyncOutlined />} onClick={start}>
-        {syncing ? '正在同步…' : (isMultiTag ? `同步 ${keywords.length} 个标签` : (isSearch ? '搜索并同步' : '抓取并同步'))}
-      </Button>
-      {logs && !syncing && (
-        <pre ref={logRef} className="bg-black border border-ph-border rounded p-2 mt-3 font-mono text-[11px] max-h-[180px] overflow-auto text-ph-text-tertiary whitespace-pre-wrap leading-[1.5]">
-          {logs}
-        </pre>
-      )}
-    </div>
-  );
-
-  const progressContent = (
-    <div className="w-[360px]">
-      <div className="text-[12px] text-ph-orange font-semibold mb-2">
-        {status || '正在同步…'} · 请勿刷新页面
-      </div>
-      <pre ref={progressLogRef} className="bg-black border border-ph-border rounded p-2 font-mono text-[11px] max-h-[220px] overflow-auto text-ph-text-tertiary whitespace-pre-wrap leading-[1.5] min-h-[80px]">
-        {logs || '准备中…'}
-      </pre>
-    </div>
-  );
-
-  if (syncing) {
-    return (
-      <Popover
-        trigger="hover"
-        placement="bottomRight"
-        content={progressContent}
-        title="同步进度"
-        mouseEnterDelay={0.1}
-      >
-        <Button type="primary" size="middle" icon={<SyncOutlined className="sync-pulse" />} loading>
-          同步中…
-        </Button>
-      </Popover>
-    );
-  }
-
-  return (
-    <Popover
-      trigger="click"
-      placement="bottomRight"
-      open={open}
-      onOpenChange={setOpen}
-      content={formContent}
-      title="同步资料"
-    >
-      <Button type="primary" size="middle" icon={<SyncOutlined />}>
-        同步资料
-      </Button>
-    </Popover>
-  );
-}
-
-// 站点配置 Modal：增删改 url / name / todayPath / enabled。
-// 保存后写入 output/sites.json，crawler 下次 crawl 自动生效。
-function SitesConfigModal({ open, onClose, onSaved }) {
-  const { message } = AntdApp.useApp();
-  const [list, setList] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/sites');
-      const data = await res.json();
-      setList((data.sites || []).map((s) => ({ ...s })));
-    } catch (e) {
-      message.error('加载站点配置失败：' + e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [message]);
-
-  useEffect(() => {
-    if (open) load();
-  }, [open, load]);
-
-  const update = (i, patch) => {
-    setList((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
-  };
-  const remove = (i) => setList((prev) => prev.filter((_, idx) => idx !== i));
-  const add = () => setList((prev) => [...prev, { url: '', name: '', todayPath: '', enabled: true }]);
-
-  const save = async () => {
-    // 简单校验：url 非空且不重复
-    const seen = new Set();
-    for (const s of list) {
-      const u = (s.url || '').trim();
-      if (!u) { message.warning('存在空的站点地址，请填写或删除'); return; }
-      if (seen.has(u)) { message.warning(`站点地址重复：${u}`); return; }
-      seen.add(u);
-    }
-    if (list.length === 0) { message.warning('至少保留一个站点'); return; }
-    setSaving(true);
-    try {
-      const res = await fetch('/api/sites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sites: list }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '保存失败');
-      message.success(`已保存 ${data.sites.length} 个站点，下次同步生效`);
-      onSaved && onSaved(data.sites);
-      onClose();
-    } catch (e) {
-      message.error('保存失败：' + e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      title="站点配置"
-      width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth - 32 : 720)}
-      destroyOnClose
-      centered
-      footer={
-        <div className="flex items-center justify-between">
-          <Button icon={<PlusOutlined />} onClick={add} disabled={saving}>添加站点</Button>
-          <Space>
-            <Button onClick={onClose} disabled={saving}>取消</Button>
-            <Button type="primary" loading={saving} onClick={save}>保存</Button>
-          </Space>
-        </div>
-      }
-    >
-      <Spin spinning={loading}>
-        <Text type="secondary" className="text-[12px] block mb-3 leading-relaxed">
-          配置爬虫站点。保存后写入 <code>output/sites.json</code>，下次「同步资料」或启动爬取即生效。
-          <span className="block mt-1 opacity-80">「今日路径」为可选高级项，留空则该站只抓列表页；禁用的站点不参与抓取。</span>
-        </Text>
-        <div className="space-y-3 max-h-[52vh] overflow-auto pr-1">
-          {list.map((s, i) => (
-            <div key={i} className="border border-ph-border rounded-lg p-3 bg-ph-card/60 space-y-2">
-              <div className="flex items-center gap-2">
-                <Input
-                  size="small"
-                  className="flex-1"
-                  placeholder="站点名称（如 91吃瓜）"
-                  value={s.name}
-                  onChange={(e) => update(i, { name: e.target.value })}
-                  disabled={saving}
-                />
-                <Tooltip title={s.enabled ? '已启用' : '已禁用'}>
-                  <Switch
-                    size="small"
-                    checked={s.enabled !== false}
-                    onChange={(v) => update(i, { enabled: v })}
-                    disabled={saving}
-                  />
-                </Tooltip>
-                <Tooltip title="删除该站点">
-                  <Button
-                    type="text"
-                    size="small"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => remove(i)}
-                    disabled={saving}
-                  />
-                </Tooltip>
-              </div>
-              <Input
-                size="small"
-                placeholder="https://站点地址（含 https://）"
-                value={s.url}
-                onChange={(e) => update(i, { url: e.target.value })}
-                disabled={saving}
-                addonBefore={<GlobalOutlined className="text-ph-text-muted" />}
-              />
-              <Input
-                size="small"
-                placeholder="今日路径（可选，如 /category/zxcghl/）"
-                value={s.todayPath}
-                onChange={(e) => update(i, { todayPath: e.target.value })}
-                disabled={saving}
-              />
-            </div>
-          ))}
-          {list.length === 0 && (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无站点，点击「添加站点」" />
-          )}
-        </div>
-      </Spin>
-    </Modal>
-  );
-}
-
-function FilterStrip({ children }) {
-  return (
-    <div
-      className="filter-strip bg-ph-bg/90 border-b border-ph-border px-[22px] py-2 flex gap-2 flex-wrap items-center"
-    >
-      {children}
-    </div>
-  );
-}
-
-function chipClass(active) {
-  return `!rounded !px-2.5 !py-[5px] !text-[12px] !border !leading-none transition-all duration-150 ${
-    active
-      ? '!bg-ph-orange !text-black !border-ph-orange !font-semibold shadow-[0_2px_8px_rgba(255,144,0,.25)]'
-      : '!bg-ph-card !text-ph-text-secondary !border-ph-border hover:!border-ph-orange/60 hover:!text-ph-text-primary hover:!bg-ph-elevated'
-  }`;
-}
-
-// 通用过滤芯片条组件
-function FilterChipStrip({ items, activeKey, onSelect, allLabel, extra, renderItem, itemKey }) {
-  return (
-    <FilterStrip>
-      <Tag.CheckableTag
-        className={chipClass(!activeKey)}
-        checked={!activeKey}
-        onChange={() => onSelect('')}
-      >
-        {allLabel}
-      </Tag.CheckableTag>
-      {items.map((item) => {
-        const key = itemKey ? itemKey(item) : item.key;
-        const isActive = activeKey === key;
-        return (
-          <Tag.CheckableTag
-            key={key}
-            className={`${chipClass(isActive)} flex items-center gap-1`}
-            checked={isActive}
-            onChange={() => onSelect(key)}
-          >
-            {renderItem ? renderItem(item, isActive) : <span>{item.label}</span>}
-          </Tag.CheckableTag>
-        );
-      })}
-      {extra}
-    </FilterStrip>
-  );
-}
+// 移动端断点阈值（与 Tailwind md 一致）
+const MOBILE_BREAKPOINT = 768;
 
 export default function App() {
   const { message } = AntdApp.useApp();
-  const searchInputRef = useRef(null);
-  const [items, setItems] = useState([]);
-  const [favorites, setFavorites] = useState([]);
-  const [favIds, setFavIds] = useState(() => new Set());
-  const [showFavorites, setShowFavorites] = useState(false);
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('');
+  const [view, setView] = useState(VIEW.HOME);
   const [selected, setSelected] = useState(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncLogs, setSyncLogs] = useState('');
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [syncPrefill, setSyncPrefill] = useState('');
+  const [query, setQuery] = useState('');
+  const [favQuery, setFavQuery] = useState('');
   const [activeTag, setActiveTag] = useState('');
-  const [activeSite, setActiveSite] = useState('');
-  const [page, setPage] = useState(1);
-  const [loadingList, setLoadingList] = useState(false);
-  const [lastQuery, setLastQuery] = useState('');
-  const [showTop, setShowTop] = useState(false);
-  const [sitesOpen, setSitesOpen] = useState(false);
-  const [tagsExpanded, setTagsExpanded] = useState(false);
-  const TAG_COLLAPSED_COUNT = 12;
-
-  const handleCardClick = useCallback((item) => setSelected(item), []);
-
-  const loadFavorites = useCallback(async () => {
-    try {
-      const res = await fetch('/api/favorites');
-      const data = await res.json();
-      const list = data.items || [];
-      setFavorites(list);
-      setFavIds(new Set(data.ids || list.map((a) => a.id)));
-    } catch (_) { /* ignore */ }
-  }, []);
-
-  const loadVideos = useCallback(async (q) => {
-    setLoadingList(true);
-    setStatus('正在加载…');
-    setPage(1);
-    setLastQuery(q || '');
-    try {
-      const url = q ? `/api/videos?q=${encodeURIComponent(q)}` : '/api/videos';
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
-      const data = await res.json();
-      setItems(data.items || []);
-      setStatus(q ? `「${q}」共 ${data.total} 条` : `共 ${data.total} 条`);
-    } catch (e) {
-      setStatus('加载失败');
-      message.error('加载失败：' + e.message);
-    } finally {
-      setLoadingList(false);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    loadVideos('');
-    loadFavorites();
-  }, [loadVideos, loadFavorites]);
-
-  // 加载站点配置，刷新站点名称映射（让 siteLabel 显示配置中的 name）。
-  const loadSiteConfigs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sites');
-      if (!res.ok) return;
-      const data = await res.json();
-      setSiteNameMap(data.sites || []);
-    } catch (_) { /* ignore */ }
-  }, []);
-  useEffect(() => { loadSiteConfigs(); }, [loadSiteConfigs]);
-
-  // 站点配置保存后：更新名称映射 + 刷新列表让卡片重渲染显示新名称。
-  const handleSitesSaved = useCallback((sites) => {
-    setSiteNameMap(sites || []);
-    setSitesOpen(false);
-    if (!showFavorites) loadVideos(query.trim());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showFavorites, query]);
-
-  // `/` focuses search; ignore when typing in inputs.
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
-      const tag = (e.target && e.target.tagName) || '';
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
-      e.preventDefault();
-      const input = searchInputRef.current?.input || searchInputRef.current;
-      if (input && typeof input.focus === 'function') input.focus();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  useEffect(() => {
-    const onScroll = () => setShowTop(window.scrollY > 480);
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
-
-  const handleToggleFavorite = useCallback(async (item) => {
-    if (!item || !item.id) return;
-    const isFav = favIds.has(item.id);
-    try {
-      if (isFav) {
-        const res = await fetch(`/api/favorites/${item.id}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '取消失败');
-        setFavIds((prev) => {
-          const next = new Set(prev);
-          next.delete(item.id);
-          return next;
-        });
-        setFavorites((prev) => prev.filter((a) => a.id !== item.id));
-        message.success('已取消收藏');
-      } else {
-        const res = await fetch('/api/favorites', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(item),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '收藏失败');
-        setFavIds((prev) => new Set(prev).add(item.id));
-        if (data.item) {
-          setFavorites((prev) => {
-            if (prev.some((a) => a.id === item.id)) return prev;
-            return [data.item, ...prev];
-          });
-        }
-        message.success('已加入收藏');
-      }
-    } catch (e) {
-      message.error(e.message);
-    }
-  }, [favIds, message]);
-
-  const sourceItems = showFavorites ? favorites : items;
-  const tagList = useMemo(() => {
-    const counts = new Map();
-    sourceItems.forEach((it) => {
-      if (it.category) counts.set(it.category, (counts.get(it.category) || 0) + 1);
-      (it.tags || []).forEach((t) => counts.set(t, (counts.get(t) || 0) + 1));
-    });
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 40)
-      .map(([tag, count]) => ({ tag, count }));
-  }, [sourceItems]);
-
-  const siteList = useMemo(() => {
-    const counts = new Map();
-    sourceItems.forEach((it) => {
-      const key = it.siteUrl || null;
-      counts.set(key, (counts.get(key) || 0) + 1);
-    });
-    return Array.from(counts.entries())
-      .map(([site, count]) => ({ site, label: siteLabel(site), count }))
-      .sort((a, b) => b.count - a.count);
-  }, [sourceItems]);
-
-  // 过滤 + 排序：仅在筛选条件变化时重新计算
-  const sortedFiltered = useMemo(() => {
-    let out = sourceItems;
-    if (activeSite) {
-      out = out.filter((it) =>
-        activeSite === '__unknown__' ? !it.siteUrl : it.siteUrl === activeSite
-      );
-    }
-    if (activeTag) {
-      out = out.filter(
-        (it) => it.category === activeTag || ((it.tags || []).includes(activeTag))
-      );
-    }
-    if (showFavorites && lastQuery) {
-      const qlc = lastQuery.toLowerCase();
-      out = out.filter(
-        (it) => (it.title || '').toLowerCase().includes(qlc) || (it.id || '').includes(qlc)
-      );
-    }
-    return out.slice().sort((a, b) => {
-      if (showFavorites) {
-        const fa = a.favoritedAt || '';
-        const fb = b.favoritedAt || '';
-        if (fa || fb) return fb.localeCompare(fa);
-      }
-      const da = a.datePublished || '';
-      const db = b.datePublished || '';
-      if (da && db) return db.localeCompare(da);
-      if (da) return -1;
-      if (db) return 1;
-      return Number(b.id) - Number(a.id);
-    });
-  }, [sourceItems, activeTag, activeSite, showFavorites, lastQuery]);
-
-  // 分页切片：仅在排序结果或页码变化时重新计算
-  const hasFilter = !!(activeTag || activeSite);
-  const totalPages = Math.max(1, Math.ceil(sortedFiltered.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const filtered = sortedFiltered; // 保持向后兼容
-  const paged = useMemo(
-    () => sortedFiltered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
-    [sortedFiltered, safePage]
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < MOBILE_BREAKPOINT : false
   );
 
-  const handleLocalSearch = () => {
-    setActiveTag('');
-    setActiveSite('');
-    if (showFavorites) {
-      setLastQuery(query.trim());
-      setPage(1);
-      setStatus(query.trim() ? `收藏中搜索「${query.trim()}」` : `收藏共 ${favorites.length} 条`);
+  // 共享数据 hook
+  const {
+    items, favorites, favIds, sites, siteCounts, loadingList,
+    loadVideos, toggleFavorite, clearAllFavorites,
+  } = useAppData(message);
+
+  // 同步 hook：完成时自动刷新视频列表
+  const handleSyncDone = useCallback(() => {
+    loadVideos(query.trim());
+  }, [loadVideos, query]);
+
+  const {
+    syncing, syncLogs, status, progress, elapsed, syncStats,
+    syncHistory, lastSyncAt, startSync, cancelSync,
+  } = useSync(message, handleSyncDone);
+
+  // 监听窗口尺寸变化，切换移动端布局
+  useEffect(() => {
+    const onResize = () => {
+      const next = window.innerWidth < MOBILE_BREAKPOINT;
+      setIsMobile((prev) => (prev !== next ? next : prev));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // 启动同步：打开 modal
+  const handleStartSync = useCallback(() => {
+    if (syncing) {
+      setSyncModalOpen(true);
       return;
     }
-    loadVideos(query.trim());
-  };
+    setSyncModalOpen(true);
+    startSync({ type: 'crawl' });
+  }, [syncing, startSync]);
 
-  const handleSync = useCallback(async ({ keyword, pageStart, pageEnd, pages, tags }) => {
-    setSyncing(true);
-    setSyncOpen(false);
-    setActiveTag('');
-    setActiveSite('');
-    setPage(1);
+  // 关闭 modal：后台运行
+  const handleSyncBackground = useCallback(() => {
+    setSyncModalOpen(false);
+  }, []);
 
-    const isTagSync = Array.isArray(tags) && tags.length > 0;
-    const isSearch = !!keyword;
-    setSyncLogs(
-      isTagSync
-        ? `开始同步 ${tags.length} 个标签: ${tags.join(', ')}\n`
-        : isSearch
-          ? `开始搜索「${keyword}」…\n`
-          : '开始抓取列表…\n'
-    );
-    setStatus(
-      isTagSync
-        ? `正在同步 ${tags.length} 个标签…`
-        : isSearch
-          ? `正在同步搜索「${keyword}」…`
-          : (pageStart === pageEnd
-            ? `正在同步第 ${pageStart} 页…`
-            : `正在同步第 ${pageStart}–${pageEnd} 页…`)
-    );
-    message.info({ content: '已开始后台同步，可继续浏览；请勿刷新页面', duration: 3 });
+  // 取消同步
+  const handleSyncCancel = useCallback(() => {
+    cancelSync();
+    setSyncModalOpen(false);
+  }, [cancelSync]);
 
-    try {
-      // 统一的请求路由
-      const [endpoint, body] = isTagSync
-        ? ['/api/sync-tags', { tags, pages: pages || 1 }]
-        : isSearch
-          ? ['/api/search-online', { keyword, pages: pages || 1 }]
-          : ['/api/crawl', { pageStart, pageEnd }];
+  // 卡片点击 -> 进入详情
+  const handleCardClick = useCallback((item) => {
+    setSelected(item);
+    setView(VIEW.DETAIL);
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
 
-      const data = await postJSON(endpoint, body);
-
-      if (data.error) {
-        setSyncLogs((p) => p + '失败：' + data.error + '\n');
-        message.error('同步失败：' + data.error);
-        setStatus('同步失败');
-        return;
-      }
-
-      const logTail = (data.logs || []).join('\n');
-
-      if (isTagSync) {
-        setSyncLogs(logTail + `\n完成：+${data.added} 新增，共 ${data.total} 条\n`);
-        setStatus(`标签同步完成，共 ${data.total} 条`);
-        message.success(`标签同步完成：+${data.added}，共 ${data.total} 条`);
-        loadVideos(query.trim());
-      } else if (isSearch) {
-        const matched = data.matched ?? (data.items || []).length;
-        setItems(data.items || []);
-        setShowFavorites(false);
-        setLastQuery(keyword);
-        setSyncLogs(logTail + `\n完成：匹配 ${matched} 条，库内共 ${data.total} 条\n`);
-        setStatus(`找到 ${matched} 条`);
-        message.success(matched > 0 ? `同步完成，找到 ${matched} 条` : '同步完成，未找到匹配');
-      } else {
-        setSyncLogs(logTail + `\n完成：新增 ${data.added} 条，库内共 ${data.total} 条\n`);
-        setStatus(`已合并，共 ${data.total} 条（+${data.added}）`);
-        message.success(`同步完成：+${data.added}，共 ${data.total} 条`);
-        loadVideos(query.trim());
-      }
-    } catch (e) {
-      setSyncLogs((p) => p + '请求失败：' + e.message + '\n');
-      message.error('网络异常：' + e.message);
-      setStatus('同步失败');
-    } finally {
-      setSyncing(false);
-    }
-  }, [message, loadVideos, query]);
-
-  useEffect(() => {
-    if (!syncing) return undefined;
-    const onBeforeUnload = (e) => {
-      e.preventDefault();
-      e.returnValue = '同步尚未完成，离开页面会中断任务。确定要离开吗？';
-      return e.returnValue;
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [syncing]);
-
-  const openSyncWithQuery = useCallback(() => {
-    setSyncPrefill(query.trim() || lastQuery || '');
-    setSyncOpen(true);
-  }, [query, lastQuery]);
-
-  const handleClose = useCallback(() => setSelected(null), []);
-
-  const handleTagClick = useCallback((tag) => {
-    setQuery(tag);
+  // 返回首页
+  const handleHomeClick = useCallback(() => {
+    setView(VIEW.HOME);
     setSelected(null);
     setActiveTag('');
-    setActiveSite('');
-    setShowFavorites(false);
-    message.info(`正在搜索「${tag}」`);
-    setTimeout(() => loadVideos(tag), 0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadVideos]);
-
-  const handleFilterTag = useCallback((tag) => {
-    setActiveTag((cur) => (cur === tag ? '' : tag));
-    setPage(1);
-  }, []);
-
-  const handleFilterSite = useCallback((key) => {
-    setActiveSite((cur) => (cur === key ? '' : key));
-    setPage(1);
-  }, []);
-
-  const clearFilters = useCallback(() => {
-    setActiveTag('');
-    setActiveSite('');
-    setPage(1);
-  }, []);
-
-  const resetHome = useCallback(() => {
     setQuery('');
-    setActiveTag('');
-    setActiveSite('');
-    setSelected(null);
-    setShowFavorites(false);
-    setLastQuery('');
     loadVideos('');
+    setDrawerOpen(false);
   }, [loadVideos]);
 
-  const toggleFavoritesView = useCallback(() => {
-    setShowFavorites((v) => {
-      const next = !v;
-      setActiveTag('');
-      setActiveSite('');
-      setPage(1);
-      setQuery('');
-      setLastQuery('');
-      setStatus(next ? `收藏共 ${favorites.length} 条` : '');
-      if (!next) loadVideos('');
-      return next;
-    });
-  }, [favorites.length, loadVideos]);
+  // 切换收藏视图
+  const handleFavoritesClick = useCallback(() => {
+    if (view === VIEW.FAVORITES) {
+      setView(VIEW.HOME);
+    } else {
+      setView(VIEW.FAVORITES);
+      setFavQuery('');
+    }
+    setSelected(null);
+    setDrawerOpen(false);
+  }, [view]);
 
-  const emptyDescription = (() => {
-    if (loadingList) return '正在加载…';
-    if (showFavorites) {
-      if (favorites.length === 0) return '还没有收藏。点卡片右上角星星即可收藏，同步不会清空。';
-      if (hasFilter || lastQuery) return '当前筛选下没有收藏，试试清除筛选。';
-      return '没有收藏。';
+  // 同步中心
+  const handleSyncCenterClick = useCallback(() => {
+    setView(VIEW.SYNC_CENTER);
+    setSelected(null);
+    setDrawerOpen(false);
+  }, []);
+
+  // 详情页返回
+  const handleBack = useCallback(() => {
+    setView(VIEW.HOME);
+    setSelected(null);
+  }, []);
+
+  // 详情页点击标签 -> 回首页搜索
+  const handleTagClick = useCallback((tag) => {
+    setView(VIEW.HOME);
+    setSelected(null);
+    setActiveTag(tag);
+    message.info(`已切换到标签「${tag}」`);
+  }, [message]);
+
+  // 本地搜索（首页）
+  const handleSearch = useCallback(() => {
+    setActiveTag('');
+    loadVideos(query.trim());
+  }, [query, loadVideos]);
+
+  // 清空收藏
+  const handleClearAll = useCallback(() => {
+    clearAllFavorites();
+  }, [clearAllFavorites]);
+
+  // 导出收藏
+  const handleExport = useCallback(() => {
+    downloadFavorites('json');
+  }, []);
+
+  // 同步完成且 modal 仍打开 -> 自动关闭
+  useEffect(() => {
+    if (!syncing && syncModalOpen && progress >= 100) {
+      const t = setTimeout(() => setSyncModalOpen(false), 1200);
+      return () => clearTimeout(t);
     }
-    if (hasFilter) {
-      return (
-        <span>
-          当前筛选没有结果
-          {activeTag && <>（标签：{activeTag}）</>}
-          {activeSite && <>（来源：{siteLabel(activeSite === '__unknown__' ? null : activeSite)}）</>}
-          ，试试清除筛选。
-        </span>
-      );
-    }
-    if (lastQuery) {
-      return `没有找到「${lastQuery}」相关内容，可换个词再搜，或打开「同步资料」做全网搜索。`;
-    }
-    return '资料库还是空的。点击「同步资料」抓取最新列表，或填关键词搜索同步。';
-  })();
+    return undefined;
+  }, [syncing, syncModalOpen, progress]);
+
+  const detailItem = selected;
 
   return (
-    <Layout className="min-h-screen app-shell">
-      <div className="sticky top-0 z-10 app-chrome">
-        <Header className="app-header flex items-center gap-3 h-[56px] !leading-[56px] px-[22px] bg-ph-header/95 shadow-[0_2px_10px_rgba(0,0,0,.5)]">
-          <button
-            type="button"
-            onClick={resetHome}
-            className="flex items-center gap-2 shrink-0 cursor-pointer bg-transparent border-0 p-0 hover:opacity-90 transition-opacity group/brand"
-            title="返回全部资料"
-          >
-            <span className="flex items-center justify-center w-8 h-8 rounded-md bg-ph-orange/15 border border-ph-orange/30 text-ph-orange transition-all group-hover/brand:bg-ph-orange/25 group-hover/brand:border-ph-orange/50">
-              <ReadOutlined style={{ fontSize: 17 }} />
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="text-ph-text-primary font-bold text-lg whitespace-nowrap tracking-tight">学习</span>
-              <span className="bg-ph-orange text-black font-bold text-sm px-2 py-0.5 rounded whitespace-nowrap shadow-[0_2px_8px_rgba(255,144,0,.35)]">资料</span>
-            </span>
-          </button>
-          <Input.Search
-            ref={searchInputRef}
-            className="app-search flex-1 min-w-0"
-            placeholder={showFavorites ? '在收藏中搜索…  (/)' : '搜索本地标题或编号…  (/)'}
-            value={query}
-            allowClear
-            onChange={(e) => setQuery(e.target.value)}
-            onSearch={handleLocalSearch}
-            enterButton={
-              <Button icon={<SearchOutlined />}>
-                {showFavorites ? '搜收藏' : '本地搜'}
-              </Button>
-            }
-          />
-          <Tooltip title={showFavorites ? '返回资料库' : '只看收藏'}>
-            <Button
-              size="middle"
-              icon={showFavorites ? <StarFilled /> : <StarOutlined />}
-              type={showFavorites ? 'primary' : 'default'}
-              onClick={toggleFavoritesView}
-            >
-              <span className="hidden sm:inline">收藏</span>
-              {favorites.length > 0 ? ` ${favorites.length}` : ''}
-            </Button>
-          </Tooltip>
-          {showFavorites && (
-            <Dropdown
-              menu={{
-                items: [
-                  { key: 'json', label: '下载 JSON', onClick: () => { window.location.href = '/api/favorites/download?format=json'; } },
-                  { key: 'txt', label: '下载地址列表 (txt)', onClick: () => { window.location.href = '/api/favorites/download?format=txt'; } },
-                ],
-              }}
-              placement="bottomRight"
-            >
-              <Button size="middle" icon={<DownloadOutlined />} disabled={favorites.length === 0}>
-                <span className="hidden md:inline">下载</span>
-              </Button>
-            </Dropdown>
-          )}
-          <SyncPanel
-            onSync={handleSync}
-            syncing={syncing}
-            logs={syncLogs}
-            status={status}
-            open={syncOpen}
-            onOpenChange={(v) => {
-              setSyncOpen(v);
-              if (!v) setSyncPrefill('');
-            }}
-            initialKeyword={syncPrefill}
-          />
-          <Tooltip title="站点配置">
-            <Button
-              size="middle"
-              icon={<SettingOutlined />}
-              onClick={() => setSitesOpen(true)}
-            />
-          </Tooltip>
-          {status && !syncing && (
-            <span
-              className="hidden xl:inline-flex items-center text-xs text-ph-text-secondary bg-ph-bg/80 border border-ph-border px-3 py-1 rounded-full max-w-[220px] overflow-hidden shrink-0"
-              title={status}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-ph-orange mr-2 shrink-0" />
-              <span className="truncate">{status}</span>
-            </span>
-          )}
-        </Header>
+    <div className="app-shell min-h-screen">
+      <AppHeader
+        query={query}
+        onQueryChange={setQuery}
+        onSearch={handleSearch}
+        favoritesCount={favorites.length}
+        isFavoritesView={view === VIEW.FAVORITES}
+        onFavoritesClick={handleFavoritesClick}
+        onSyncCenterClick={handleSyncCenterClick}
+        onSyncClick={handleStartSync}
+        onHomeClick={handleHomeClick}
+        syncing={syncing}
+        isMobile={isMobile}
+        onOpenDrawer={() => setDrawerOpen(true)}
+      />
 
-        {syncing && (
-          <div className="sync-banner relative flex items-center gap-2 px-[22px] py-1.5 text-[12px] text-ph-orange bg-[#1a1408] border-b border-ph-orange/25 overflow-hidden">
-            <SyncOutlined spin className="sync-pulse shrink-0" />
-            <span className="font-semibold shrink-0">{status || '正在同步…'}</span>
-            <span className="text-ph-text-muted truncate flex-1 min-w-0">可继续浏览 · 悬停「同步中」查看日志 · 请勿刷新</span>
-            <span className="absolute bottom-0 left-0 h-[2px] bg-ph-orange/60 sync-progress-bar" />
-          </div>
-        )}
-
-        {/* 一体化筛选控制栏 */}
-        {(tagList.length > 0 || siteList.length > 1 || hasFilter || lastQuery || sourceItems.length > 0 || showFavorites) && (
-          <div className="bg-ph-bg/95 border-b border-ph-border">
-            {/* 已选筛选 chip 快速清除 */}
-            {(activeTag || activeSite || (showFavorites && lastQuery)) && (
-              <div className="flex items-center gap-2 px-[22px] pt-2 pb-1.5 text-[12px] flex-wrap">
-                <span className="text-ph-text-muted shrink-0 inline-flex items-center gap-1">
-                  <TagsOutlined style={{ fontSize: 11 }} />
-                  已选
-                </span>
-                {activeTag && (
-                  <Tag
-                    closable
-                    onClose={(e) => { e.preventDefault(); handleFilterTag(activeTag); }}
-                    className="!bg-ph-orange/15 !text-ph-orange !border-ph-orange/40 !rounded !m-0 !py-0.5"
-                    icon={<TagsOutlined style={{ fontSize: 10 }} />}
-                  >
-                    {activeTag}
-                  </Tag>
-                )}
-                {activeSite && (
-                  <Tag
-                    closable
-                    onClose={(e) => { e.preventDefault(); handleFilterSite(activeSite); }}
-                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded !m-0 !py-0.5"
-                    icon={<GlobalOutlined style={{ fontSize: 10 }} />}
-                  >
-                    {siteLabel(activeSite === '__unknown__' ? null : activeSite)}
-                  </Tag>
-                )}
-                {showFavorites && lastQuery && (
-                  <Tag
-                    closable
-                    onClose={(e) => { e.preventDefault(); setLastQuery(''); }}
-                    className="!bg-ph-border/60 !text-ph-text-secondary !border-ph-border !rounded !m-0 !py-0.5"
-                  >
-                    搜索「{lastQuery}」
-                  </Tag>
-                )}
-                <Button
-                  type="link"
-                  size="small"
-                  icon={<ClearOutlined />}
-                  className="!px-1.5 !text-[11px] !h-auto !min-h-0 !py-0 !text-ph-text-muted hover:!text-ph-orange"
-                  onClick={clearFilters}
-                >
-                  全部清除
-                </Button>
-              </div>
-            )}
-
-            {/* 标签 + 来源 + 统计 一行 */}
-            <div className="flex flex-col sm:flex-row sm:items-start gap-2 px-[22px] py-2">
-              {/* 标签区 */}
-              {tagList.length > 0 && (
-                <div className="flex-1 flex items-start gap-2 min-w-0 flex-wrap">
-                  <span className="text-[12px] text-ph-text-muted shrink-0 pt-[3px] whitespace-nowrap">标签</span>
-                  <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-                    <Tag.CheckableTag
-                      className={chipClass(!activeTag)}
-                      checked={!activeTag}
-                      onChange={() => { setActiveTag(''); setPage(1); }}
-                    >
-                      全部
-                    </Tag.CheckableTag>
-                    {(tagsExpanded ? tagList : tagList.slice(0, TAG_COLLAPSED_COUNT)).map(({ tag }) => {
-                      const isActive = activeTag === tag;
-                      return (
-                        <Tag.CheckableTag
-                          key={tag}
-                          className={`${chipClass(isActive)} flex items-center gap-2`}
-                          checked={isActive}
-                          onChange={() => handleFilterTag(tag)}
-                        >
-                          <span>{tag}</span>
-                          <Tooltip title={`同步标签「${tag}」`}>
-                            <span
-                              role="button"
-                              className={`inline-flex items-center rounded-sm px-1 py-0.5 ml-1 ${isActive ? 'text-black/80 hover:text-black' : 'text-ph-text-muted hover:text-ph-orange'} transition-colors cursor-pointer`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                if (syncing) return;
-                                handleSync({ tags: [tag], pages: 3 });
-                              }}
-                            >
-                              <SyncOutlined style={{ fontSize: 10 }} />
-                            </span>
-                          </Tooltip>
-                        </Tag.CheckableTag>
-                      );
-                    })}
-                    {tagList.length > TAG_COLLAPSED_COUNT && (
-                      <Button
-                        type="text"
-                        size="small"
-                        className="!h-[22px] !px-1.5 !text-[11px] !text-ph-text-muted hover:!text-ph-orange !rounded-md"
-                        onClick={() => setTagsExpanded((v) => !v)}
-                      >
-                        {tagsExpanded ? '收起' : `+${tagList.length - TAG_COLLAPSED_COUNT}`}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* 右侧操作区：来源 + 同步热门 + 统计信息 */}
-              <div className="flex items-center gap-2 flex-wrap sm:ml-auto sm:shrink-0">
-                {/* 来源筛选下拉 */}
-                {siteList.length > 1 && (
-                  <Select
-                    size="small"
-                    style={{ minWidth: 120 }}
-                    value={activeSite || undefined}
-                    placeholder="全部来源"
-                    allowClear
-                    onChange={(val) => { setActiveSite(val || ''); setPage(1); }}
-                    options={siteList.map((s) => ({
-                      value: s.site || '__unknown__',
-                      label: `${s.label} (${s.count})`,
-                    }))}
-                    classNames={{
-                      root: 'filter-site-select',
-                    }}
-                  />
-                )}
-                
-                {/* 统计信息 chip */}
-                <Tag
-                  className="!rounded !m-0 !bg-ph-bg/60 !border-ph-border !text-ph-text-secondary !px-2 inline-flex items-center"
-                >
-                  {showFavorites
-                    ? `收藏 ${filtered.length}${favorites.length > filtered.length ? `/${favorites.length}` : ''}`
-                    : (hasFilter
-                      ? `${filtered.length}/${items.length}`
-                      : `${filtered.length} 条`)}
-                  {filtered.length > PAGE_SIZE && (
-                    <span className="opacity-70 ml-1">· {safePage}/{totalPages}</span>
-                  )}
-                </Tag>
-                {/* 显示全部 / 退出收藏 */}
-                {lastQuery && !hasFilter && !showFavorites && (
-                  <Button size="small" type="text" icon={<ReloadOutlined />} onClick={resetHome}>
-                    全部
-                  </Button>
-                )}
-                {showFavorites && (
-                  <Button size="small" type="text" icon={<CloseOutlined />} onClick={toggleFavoritesView}>
-                    退出收藏
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <Content className="px-[22px] py-[18px] pb-14">
-        {loadingList && items.length === 0 && !showFavorites ? (
-          <SkeletonGrid />
-        ) : (
-          <Spin spinning={loadingList && items.length > 0} tip="正在加载…">
-            {filtered.length === 0 ? (
-              <Empty
-                image={(
-                  <span className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-ph-orange/8 border border-ph-orange/15 text-ph-orange/70 rise-in">
-                    <InboxOutlined style={{ fontSize: 40 }} />
-                  </span>
-                )}
-                description={<Text type="secondary" className="!text-ph-text-muted">{emptyDescription}</Text>}
-                className="!py-20 rise-in"
-              >
-                {hasFilter && (
-                  <Button type="primary" icon={<ClearOutlined />} onClick={clearFilters}>清除筛选</Button>
-                )}
-                {!hasFilter && (
-                  <Space>
-                    {lastQuery && <Button onClick={resetHome}>显示全部</Button>}
-                    <Button type="primary" icon={<SyncOutlined />} disabled={syncing} onClick={openSyncWithQuery}>
-                      同步资料
-                    </Button>
-                  </Space>
-                )}
-              </Empty>
-            ) : (
-              <>
-                <div className="grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-                  {paged.map((item, i) => (
-                    <VideoCard
-                      key={item.id}
-                      item={item}
-                      index={i}
-                      onClick={handleCardClick}
-                      favorited={favIds.has(item.id)}
-                      onToggleFavorite={handleToggleFavorite}
-                    />
-                  ))}
-                </div>
-                {filtered.length > PAGE_SIZE && (
-                  <div className="flex justify-center items-center gap-3 mt-8 pt-6 border-t border-ph-border/40">
-                    <Pagination
-                      current={safePage}
-                      pageSize={PAGE_SIZE}
-                      total={filtered.length}
-                      onChange={(p) => {
-                        setPage(p);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      showSizeChanger={false}
-                      showTotal={(t, [from, to]) => `${from}–${to} / ${t}`}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-          </Spin>
-        )}
-      </Content>
-
-      {showTop && (
-        <Tooltip title="回到顶部" placement="left">
-          <button
-            type="button"
-            className="back-top"
-            aria-label="回到顶部"
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          >
-            <VerticalAlignTopOutlined />
-          </button>
-        </Tooltip>
-      )}
-
-      {selected && (
-        <PlayerModal
-          item={selected}
-          onClose={handleClose}
-          onTagClick={handleTagClick}
-          favorited={favIds.has(selected.id)}
-          onToggleFavorite={handleToggleFavorite}
+      {view === VIEW.HOME && (
+        <HomeView
+          items={items}
+          favIds={favIds}
+          sites={sites}
+          loadingList={loadingList}
+          activeTag={activeTag}
+          onTagChange={setActiveTag}
+          onCardClick={handleCardClick}
+          onToggleFavorite={toggleFavorite}
+          isMobile={isMobile}
         />
       )}
 
-      <SitesConfigModal
-        open={sitesOpen}
-        onClose={() => setSitesOpen(false)}
-        onSaved={handleSitesSaved}
+      {view === VIEW.DETAIL && detailItem && (
+        <DetailView
+          item={detailItem}
+          items={items}
+          sites={sites}
+          favIds={favIds}
+          favorited={favIds.has(detailItem.id)}
+          onToggleFavorite={toggleFavorite}
+          onBack={handleBack}
+          onCardClick={handleCardClick}
+          onTagClick={handleTagClick}
+        />
+      )}
+
+      {view === VIEW.FAVORITES && (
+        <FavoritesView
+          favorites={favorites}
+          favIds={favIds}
+          sites={sites}
+          query={favQuery}
+          onQueryChange={setFavQuery}
+          onCardClick={handleCardClick}
+          onToggleFavorite={toggleFavorite}
+          onClearAll={handleClearAll}
+          onExport={handleExport}
+        />
+      )}
+
+      {view === VIEW.SYNC_CENTER && (
+        <SyncCenterView
+          sites={sites}
+          siteCounts={siteCounts}
+          itemsCount={items.length}
+          syncHistory={syncHistory}
+          lastSyncAt={lastSyncAt}
+          syncing={syncing}
+          onTriggerSync={handleStartSync}
+        />
+      )}
+
+      <SyncModal
+        open={syncModalOpen}
+        status={status}
+        progress={progress}
+        elapsed={elapsed}
+        syncStats={syncStats}
+        syncLogs={syncLogs}
+        onCancel={handleSyncCancel}
+        onBackground={handleSyncBackground}
       />
-    </Layout>
+
+      {/* 移动端抽屉：收藏 / 日志 / 同步 + 标签筛选（仅首页显示） */}
+      <Drawer
+        title="导航菜单"
+        placement="right"
+        open={drawerOpen && isMobile}
+        onClose={() => setDrawerOpen(false)}
+        width={280}
+        className="app-drawer"
+        styles={{
+          header: { background: '#0A0A0A', borderBottom: '1px solid rgba(255,255,255,0.06)', color: '#fff' },
+          body: { background: '#0A0A0A', padding: '16px 12px' },
+          mask: { background: 'rgba(0,0,0,0.7)' },
+        }}
+      >
+        {/* 操作按钮组 */}
+        <div className="space-y-2 mb-5">
+          <Button
+            block
+            onClick={handleFavoritesClick}
+            icon={view === VIEW.FAVORITES ? <HeartFilled style={{ color: '#ef4444' }} /> : <HeartOutlined />}
+            className={`!flex !items-center !justify-between !h-11 !pl-3 !pr-4 !rounded-xl !text-sm !font-bold !border !gap-1 ${
+              view === VIEW.FAVORITES
+                ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
+                : '!bg-[#141416] !text-neutral-200 !border-white/10'
+            }`}
+            styles={{ icon: { marginInlineEnd: '4px' } }}
+          >
+            <span className="flex items-center gap-1">我的收藏</span>
+            {favorites.length > 0 && (
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#FF9900] text-black shrink-0">
+                {favorites.length}
+              </span>
+            )}
+          </Button>
+
+          <Button
+            block
+            onClick={handleSyncCenterClick}
+            icon={<FileTextOutlined />}
+            className={`!flex !items-center !justify-start !h-11 !pl-3 !rounded-xl !text-sm !font-bold !border !gap-1 ${
+              view === VIEW.SYNC_CENTER
+                ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
+                : '!bg-[#141416] !text-neutral-200 !border-white/10'
+            }`}
+            styles={{ icon: { marginInlineEnd: '4px' } }}
+          >
+            同步日志
+          </Button>
+
+          <Button
+            block
+            onClick={handleStartSync}
+            icon={<SyncOutlined spin={syncing} />}
+            className="!flex !items-center !justify-start !h-11 !pl-3 !rounded-xl !text-sm !font-bold !bg-[#FF9900]/10 !border !border-[#FF9900]/30 !text-[#FF9900] !gap-1"
+            styles={{ icon: { marginInlineEnd: '4px' } }}
+          >
+            {syncing ? '同步中…' : '立即同步'}
+          </Button>
+        </div>
+      </Drawer>
+    </div>
   );
 }
