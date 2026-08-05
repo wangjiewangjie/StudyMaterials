@@ -11,6 +11,7 @@ const https = require('https');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
+const { matchesExclude, filterExcluded } = require('./lib/exclude');
 
 // 站点项：{ url, name, todayPath, enabled, archiveSuffix? }；archiveSuffix 默认 "/"，部分站用 ".html"
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
@@ -68,34 +69,6 @@ function getSites() { return SITES; }
 function getBaseUrl() { return BASE_URL; }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-
-// 标题或标签含这些关键词的条目不入库（不区分大小写）
-const EXCLUDE_KEYWORDS = ['重口味', 'ai'];
-const EXCLUDE_KW_LOWER = EXCLUDE_KEYWORDS.map((kw) => kw.toLowerCase());
-
-function matchesExclude(article) {
-  const title = (article.title || '').toLowerCase();
-  if (EXCLUDE_KW_LOWER.some((k) => title.includes(k))) return true;
-  const tags = article.tags || [];
-  for (let i = 0; i < tags.length; i++) {
-    const t = String(tags[i]).toLowerCase();
-    for (let j = 0; j < EXCLUDE_KW_LOWER.length; j++) {
-      if (t.includes(EXCLUDE_KW_LOWER[j])) return true;
-    }
-  }
-  return false;
-}
-
-/** 原地剔除命中排除词的文章；label 仅用于日志 */
-function filterExcluded(articles, label, log) {
-  const before = articles.length;
-  for (let i = articles.length - 1; i >= 0; i--) {
-    if (matchesExclude(articles[i])) articles.splice(i, 1);
-  }
-  const removed = before - articles.length;
-  if (removed > 0) log(`Excluded ${removed} articles by ${label} (重口味/ai)`);
-  return removed;
-}
 
 // Keep-Alive：复用同主机 TCP，减少爬取握手开销
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });

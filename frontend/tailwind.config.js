@@ -5,6 +5,18 @@ export default {
   corePlugins: { preflight: false },
   theme: {
     extend: {
+      // 统一圆角：xs2 / sm4 / md6 / lg8；pill 仅用于筛选胶囊
+      borderRadius: {
+        none: '0',
+        sm: '2px',
+        DEFAULT: '4px',
+        md: '4px',
+        lg: '6px',
+        xl: '8px',
+        '2xl': '10px',
+        '3xl': '12px',
+        full: '9999px',
+      },
       colors: {
         ph: {
           orange: '#FF9900',
@@ -24,9 +36,7 @@ export default {
         },
       },
       fontFamily: {
-        // 英文/数字: Segoe UI 高级影视平台感；中文回退到微软雅黑
         sans: ['Segoe UI', 'Microsoft YaHei', 'sans-serif'],
-        // 仅保留给代码/日志/URL 等真正需要等宽的场景
         mono: ['Consolas', 'Courier New', 'monospace'],
       },
       animation: {

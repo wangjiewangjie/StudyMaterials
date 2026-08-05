@@ -177,6 +177,7 @@ function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
     container,
     url: m3u8Url,
     type: 'm3u8',
+    theme: '#FF9900',
     poster: '',
     volume: 0.7,
     autoplay: true,
@@ -415,7 +416,7 @@ export default function VideoPlayer({ item, onTags }) {
             status="error"
             title="播放失败"
             subTitle={errorMsg || '请检查网络后重试（详情见控制台）'}
-            extra={<Button type="primary" icon={<ReloadOutlined />} onClick={retry}>重新加载</Button>}
+            extra={<Button type="primary" size="middle" icon={<ReloadOutlined />} onClick={retry}>重新加载</Button>}
           />
         </div>
       )}

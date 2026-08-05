@@ -47,9 +47,9 @@ export default function SyncModal({
       centered
       closable={false}
       modalRender={(node) => (
-        <div className="sync-modal-card relative w-full bg-[#0A0A0A] border border-white/10 rounded-lg shadow-2xl shadow-black overflow-hidden">
+        <div className="sync-modal-card relative w-full bg-ph-header border border-white/10 rounded-lg shadow-2xl shadow-black overflow-hidden">
           {/* 顶部装饰渐变条 */}
-          <div className="h-1 w-full bg-gradient-to-r from-[#FF9900] via-amber-400 to-[#FF9900]" />
+          <div className="h-1 w-full" style={{ background: 'var(--g-orange-bar)' }} />
           {node}
         </div>
       )}
@@ -57,10 +57,10 @@ export default function SyncModal({
       {/* Header */}
       <div className="p-5 sm:p-6 border-b border-white/5 flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="relative w-12 h-12 rounded-lg bg-[#FF9900]/10 border border-[#FF9900]/30 flex items-center justify-center">
-            <SyncOutlined className="text-[#FF9900] text-xl" spin={!isDone} />
+          <div className="relative w-12 h-12 rounded-lg flex items-center justify-center border border-ph-orange/30" style={{ background: 'var(--g-orange-soft)' }}>
+            <SyncOutlined className="text-ph-orange text-xl" spin={!isDone} />
             {!isDone && (
-              <div className="absolute inset-0 rounded-lg border border-[#FF9900]/20 animate-ping opacity-30" />
+              <div className="absolute inset-0 rounded-lg border border-ph-orange/20 animate-ping opacity-30" />
             )}
           </div>
           <div>
@@ -74,10 +74,10 @@ export default function SyncModal({
         </div>
         <Button
           type="text"
-          size="small"
+          size="middle"
           onClick={onBackground}
           icon={<CloseOutlined style={{ fontSize: 14 }} />}
-          className="!w-8 !h-8 !rounded-lg !bg-white/5 hover:!bg-white/10 !border !border-white/10 !text-gray-400 hover:!text-white shrink-0"
+          className="app-btn-icon !bg-white/5 hover:!bg-white/10 !border !border-white/10 !text-gray-400 hover:!text-white shrink-0"
           aria-label="后台运行"
           title="后台运行"
         />
@@ -89,12 +89,12 @@ export default function SyncModal({
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs">
             <span className="font-bold text-white">{status || (isDone ? '同步完成' : '正在同步…')}</span>
-            <span className="font-black text-[#FF9900] tabular-nums">{pct}%</span>
+            <span className="font-black text-ph-orange tabular-nums">{pct}%</span>
           </div>
-          <div className="h-2.5 bg-[#1a1a1e] rounded-lg overflow-hidden border border-white/5">
+          <div className="h-2.5 bg-ph-panelAlt rounded-lg overflow-hidden border border-white/5">
             <div
-              className="h-full bg-gradient-to-r from-[#FF9900] to-amber-400 rounded-lg relative transition-[width] duration-500 ease-out"
-              style={{ width: `${pct}%` }}
+              className="h-full rounded-lg relative transition-[width] duration-500 ease-out"
+              style={{ width: `${pct}%`, background: 'var(--g-orange-bar)' }}
             >
               {!isDone && (
                 <div className="absolute inset-0 bg-white/20 sync-progress-shimmer" />
@@ -123,7 +123,7 @@ export default function SyncModal({
           </div>
           <div className="bg-[#121212] border border-white/5 rounded-lg p-3 text-center">
             <div className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">跳过</div>
-            <div className="text-lg font-black text-amber-400 tabular-nums">
+            <div className="text-lg font-black text-ph-orange-light tabular-nums">
               {syncStats.skipped ?? 0}
             </div>
           </div>
@@ -136,8 +136,8 @@ export default function SyncModal({
         </div>
 
         {/* 安全提示 */}
-        <div className="bg-[#FF9900]/5 border border-[#FF9900]/20 rounded-lg p-3 flex items-center gap-2">
-          <SafetyCertificateOutlined className="text-[#FF9900] shrink-0" style={{ fontSize: 14 }} />
+        <div className="notice-soft !p-3">
+          <SafetyCertificateOutlined className="text-ph-orange shrink-0" style={{ fontSize: 14 }} />
           <p className="text-[11px] text-gray-400 leading-tight m-0">
             同步过程使用只读模式，不会修改你的收藏配置或远端数据源。所有通信均通过加密通道进行。
           </p>
@@ -169,16 +169,18 @@ export default function SyncModal({
         </div>
         <div className="flex items-center gap-2">
           <Button
+            size="middle"
             onClick={onBackground}
-            className="!flex-1 sm:!flex-none !px-5 !py-2.5 !rounded-lg !text-xs !font-bold !bg-white/5 hover:!bg-white/10 !text-gray-300 !border-white/10"
+            className="!flex-1 sm:!flex-none !font-bold !bg-white/5 hover:!bg-white/10 !text-gray-300 !border-white/10"
           >
             后台运行
           </Button>
           <Button
+            size="middle"
             danger
             onClick={onCancel}
             disabled={isDone}
-            className="!flex-1 sm:!flex-none !px-5 !py-2.5 !rounded-lg !text-xs !font-bold !bg-red-500/10 hover:!bg-red-500/20 !text-red-400 !border !border-red-500/30"
+            className="!flex-1 sm:!flex-none !font-bold !bg-red-500/10 hover:!bg-red-500/20 !text-red-400 !border !border-red-500/30"
           >
             取消同步
           </Button>

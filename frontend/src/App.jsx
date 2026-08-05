@@ -252,15 +252,16 @@ export default function App() {
         <div className="space-y-2 mb-5">
           <Button
             block
+            size="large"
             onClick={handleFavoritesClick}
-            className={`!flex !items-center !justify-between !h-11 !pl-3 !pr-4 !rounded-lg !text-sm !font-bold !border ${
+            className={`!flex !items-center !justify-between !font-bold !border ${
               view === VIEW.FAVORITES
                 ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
                 : '!bg-[#141416] !text-neutral-200 !border-white/10'
             }`}
           >
             <span className="flex items-center gap-1">
-              {view === VIEW.FAVORITES ? <StarFilled style={{ color: '#ef4444' }} /> : <StarOutlined />}
+              {view === VIEW.FAVORITES ? <StarFilled style={{ color: '#FF9900' }} /> : <StarOutlined />}
               我的收藏
             </span>
             {favorites.length > 0 && (
@@ -272,24 +273,29 @@ export default function App() {
 
           <Button
             block
+            size="large"
             onClick={handleSyncCenterClick}
             icon={<FileTextOutlined />}
-            className={`!flex !items-center !justify-start !h-11 !pl-3 !rounded-lg !text-sm !font-bold !border !gap-1 ${
+            className={`!inline-flex !items-center !justify-start !font-bold !border ${
               view === VIEW.SYNC_CENTER
                 ? '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
                 : '!bg-[#141416] !text-neutral-200 !border-white/10'
             }`}
-            styles={{ icon: { marginInlineEnd: '4px' } }}
           >
             同步日志
           </Button>
 
           <Button
             block
+            size="large"
             onClick={handleStartSync}
+            disabled={syncing}
             icon={<SyncOutlined spin={syncing} />}
-            className="!flex !items-center !justify-start !h-11 !pl-3 !rounded-lg !text-sm !font-bold !bg-[#FF9900]/10 !border !border-[#FF9900]/30 !text-[#FF9900] !gap-1"
-            styles={{ icon: { marginInlineEnd: '4px' } }}
+            className={`!inline-flex !items-center !justify-start !font-bold !border ${
+              syncing
+                ? '!bg-white/5 !border-white/10 !text-neutral-500'
+                : '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
+            }`}
           >
             {syncing ? '同步中…' : '立即同步'}
           </Button>

@@ -13,6 +13,7 @@ const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
 const { decryptBuffer } = require('./image-decrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
+const { matchesExclude, filterExcludedArticles } = require('./lib/exclude');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 3000;
 const PORT_FILE = path.join(__dirname, '.server-port');
@@ -337,9 +338,14 @@ app.post('/api/sites', (req, res) => {
   }
 });
 
+/** 可播放且未命中排除词的视频 */
+function getPlayableVideos() {
+  return filterExcludedArticles(getIndex().filter((a) => a.video && a.video.url));
+}
+
 // 视频列表（?q= 本地搜索；仅返回已有视频地址的条目）
 app.get('/api/videos', (req, res) => {
-  const all = getIndex().filter((a) => a.video && a.video.url);
+  const all = getPlayableVideos();
   const q = (req.query.q || '').trim().toLowerCase();
   const result = q
     ? all.filter((a) => (a.title || '').toLowerCase().includes(q) || (a.id || '').includes(q))
@@ -472,7 +478,7 @@ app.get('/api/refresh/:id', async (req, res) => {
 // ---------- 收藏（独立于 index，爬取不会清空） ----------
 
 app.get('/api/favorites', (req, res) => {
-  const items = getFavorites().map(toVideoItem);
+  const items = filterExcludedArticles(getFavorites()).map(toVideoItem);
   res.json({ total: items.length, items, ids: items.map((a) => a.id) });
 });
 
@@ -540,7 +546,7 @@ app.post('/api/search-online', async (req, res) => {
     });
     // Crawl rewrote index.json; bust the mtime cache so getIndex reloads.
     onIndexChanged();
-    const all = getIndex().filter((a) => a.video && a.video.url);
+    const all = getPlayableVideos();
     const qlc = keyword.toLowerCase();
     const items = all
       .filter((a) => (a.title || '').toLowerCase().includes(qlc) || (a.id || '').includes(qlc))

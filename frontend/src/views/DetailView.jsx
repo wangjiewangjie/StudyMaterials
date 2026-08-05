@@ -5,14 +5,10 @@ import {
 } from '@ant-design/icons';
 import VideoPlayer from '../VideoPlayer.jsx';
 import VideoCard from '../components/VideoCard.jsx';
-import { formatDate, buildSiteNameMap, resolveSiteName } from '../services/api.js';
+import PageShell from '../components/PageShell.jsx';
+import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
+import { REC_GUTTER, REC_RESPONSIVE } from '../constants/layout.js';
 
-// 推荐栅格响应式：2 / 2 / 4 列
-const REC_RESPONSIVE = { xs: 12, sm: 12, lg: 6 };
-const REC_GUTTER = [12, 16];
-
-// 详情页：顶部播放器 + 元信息卡片 + 同类推荐 + 最新视频。
-// onTagClick 用于点击标签回首页搜索；onBack 返回列表。
 export default function DetailView({
   item,
   items,
@@ -26,26 +22,19 @@ export default function DetailView({
 }) {
   const [localTags, setLocalTags] = useState(item.tags || []);
   const [localCategory, setLocalCategory] = useState(item.category || null);
-  const [localDate, setLocalDate] = useState(item.datePublished || null);
 
   useEffect(() => {
     setLocalTags(item.tags || []);
     setLocalCategory(item.category || null);
-    setLocalDate(item.datePublished || null);
   }, [item]);
 
   const hasVideo = !!(item.video && item.video.url);
-
-  // 站点名称映射：url -> name
   const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
-
-  // 数据源：优先站点配置名称，否则取主机名
   const sourceName = useMemo(
     () => resolveSiteName(item.siteUrl, siteNameMap),
     [item.siteUrl, siteNameMap]
   );
 
-  // 相似推荐：同分类或共享标签的前 4 条
   const similar = useMemo(() => {
     if (!items || items.length === 0) return [];
     const pool = items.filter((it) => it.id !== item.id);
@@ -66,106 +55,78 @@ export default function DetailView({
     return out;
   }, [items, item.id, localCategory, localTags]);
 
-  const handleTags = (newTags, newCategory, newDate) => {
+  const handleTags = (newTags, newCategory) => {
     if (newTags && newTags.length) setLocalTags(newTags);
     if (newCategory) setLocalCategory(newCategory);
-    if (newDate) setLocalDate(newDate);
   };
 
   return (
-    <main className="max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-24 pb-16 space-y-8">
-      {/* 顶栏：返回按钮 + 数据源（可点击跳转原文） */}
+    <PageShell>
       <div className="flex items-center justify-between gap-3">
         <Button
+          size="middle"
           onClick={onBack}
           icon={<ArrowLeftOutlined style={{ fontSize: 14 }} />}
-          className="!flex !items-center !gap-2 !px-3.5 !py-2 !h-auto !bg-neutral-800/80 hover:!bg-neutral-700 !text-neutral-200 !rounded-lg !text-xs !font-semibold !border-0 shrink-0"
+          className="!inline-flex !items-center !font-semibold !bg-ph-elevated/90 hover:!bg-ph-panelAlt !text-ph-text-primary !border-0 shrink-0"
         >
           返回浏览列表
         </Button>
-        {item.url ? (
+        <div className="flex items-center gap-2 shrink-0">
+          {item.url ? (
+            <Button
+              type="text"
+              size="small"
+              icon={<LinkOutlined />}
+              href={item.url}
+              target="_blank"
+              rel="noreferrer"
+              title="在新标签打开原文"
+              className="!inline-flex !items-center !text-ph-orange !font-medium !border-0 !bg-transparent !shadow-none hover:!text-ph-orange-light"
+            >
+              数据源: {sourceName}
+            </Button>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs text-ph-orange font-medium">
+              数据源: {sourceName}
+            </span>
+          )}
           <Button
             size="small"
-            icon={<LinkOutlined />}
-            href={item.url}
-            target="_blank"
-            rel="noreferrer"
-            title="在新标签打开原文"
-            className="!flex !items-center !gap-1.5 !text-xs !text-amber-400 !font-medium !bg-neutral-800 hover:!bg-neutral-700 !px-2.5 !py-1 !rounded-lg !border !border-neutral-700"
+            onClick={() => onToggleFavorite(item)}
+            icon={favorited
+              ? <StarFilled style={{ color: '#FF9900', fontSize: 13 }} />
+              : <StarOutlined style={{ fontSize: 13 }} />}
+            className={`!inline-flex !items-center !font-bold !border ${
+              favorited
+                ? '!bg-ph-orange/15 !text-ph-orange !border-ph-orange/35 hover:!bg-ph-orange/25'
+                : '!bg-white/5 !text-ph-text-secondary !border-white/10 hover:!bg-white/10'
+            }`}
           >
-            数据源: {sourceName}
+            {favorited ? '已收藏' : '收藏'}
           </Button>
-        ) : (
-          <div className="text-xs text-neutral-400 flex items-center gap-2 shrink-0">
-            <span>数据源:</span>
-            <Tag className="!m-0 !text-amber-400 !font-medium !bg-neutral-800 !px-2 !py-0.5 !rounded-lg !border !border-neutral-700">
-              {sourceName}
-            </Tag>
-          </div>
-        )}
+        </div>
       </div>
 
-      {/* 播放器 */}
-      <div className="w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-[#0A0A0A]">
+      <div className="relative z-0 w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-ph-header">
         {hasVideo ? (
           <VideoPlayer item={item} onTags={handleTags} />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm">
+          <div className="w-full h-full flex items-center justify-center text-ph-text-muted text-sm">
             该条目暂无可播放地址
           </div>
         )}
       </div>
 
-      {/* 元信息卡片 */}
-      <div className="bg-[#0A0A0A] border border-white/5 rounded-lg p-6 shadow-2xl space-y-6">
-        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 border-b border-white/10 pb-5">
-          <div className="space-y-2 max-w-3xl">
-            <h1 className="text-2xl sm:text-3xl font-black italic tracking-tighter text-white leading-snug">
-              {item.title || `条目 ${item.id}`}
-            </h1>
-          </div>
-          <Button
-            onClick={() => onToggleFavorite(item)}
-            icon={favorited
-              ? <StarFilled style={{ color: '#ef4444' }} />
-              : <StarOutlined />}
-            className={`!flex !items-center !gap-2 !px-5 !py-2.5 !h-auto !rounded-lg !text-xs !font-bold !border shrink-0 ${
-              favorited
-                ? '!bg-red-500/20 !text-red-400 !border-red-500/40 hover:!bg-red-500/30'
-                : '!bg-white/5 !text-gray-300 !border-white/10 hover:!bg-white/10'
-            }`}
-          >
-            {favorited ? '已在收藏库' : '加入收藏'}
-          </Button>
-        </div>
+      <div className="surface-card p-4 sm:p-5 space-y-4">
+        <h1 className="text-xl sm:text-2xl font-black italic tracking-tighter text-white leading-snug m-0">
+          {item.title || `条目 ${item.id}`}
+        </h1>
 
-        {/* 元信息四宫格 */}
-        <Row gutter={[12, 12]} className="detail-meta-grid bg-[#121212] border border-white/5 p-3.5 rounded-lg text-xs text-gray-300">
-          <Col xs={12} sm={6}>
-            <div className="text-[10px] text-gray-500 uppercase font-bold">视频时长</div>
-            <div className="font-bold text-white">—</div>
-          </Col>
-          <Col xs={12} sm={6}>
-            <div className="text-[10px] text-gray-500 uppercase font-bold">分辨率</div>
-            <div className="font-bold text-emerald-400">{hasVideo ? 'HLS Stream' : '仅图文'}</div>
-          </Col>
-          <Col xs={12} sm={6}>
-            <div className="text-[10px] text-gray-500 uppercase font-bold">数据源节点</div>
-            <div className="font-bold text-white truncate max-w-[120px]">{sourceName}</div>
-          </Col>
-          <Col xs={12} sm={6}>
-            <div className="text-[10px] text-gray-500 uppercase font-bold">发布日期</div>
-            <div className="font-bold text-white tabular-nums">{localDate ? formatDate(localDate) : '—'}</div>
-          </Col>
-        </Row>
-
-        {/* 标签区（不显示标题） */}
         {(localCategory || localTags.length > 0) && (
           <div className="flex flex-wrap items-center gap-1.5">
             {localCategory && (
               <Tag
-                color="orange"
-                className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-[#FF9900]/15 !text-[#FF9900] !border-[#FF9900]/30"
+                className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-orange/15 !text-ph-orange !border-ph-orange/30"
                 onClick={() => onTagClick && onTagClick(localCategory)}
               >
                 {localCategory}
@@ -174,7 +135,7 @@ export default function DetailView({
             {localTags.map((t) => (
               <Tag
                 key={t}
-                className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-neutral-800 !text-neutral-300 !border-neutral-700 hover:!text-[#FF9900] hover:!border-[#FF9900]/40 transition-colors"
+                className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-elevated !text-ph-text-secondary !border-white/10 hover:!text-ph-orange hover:!border-ph-orange/40 transition-colors"
                 onClick={() => onTagClick && onTagClick(t)}
               >
                 #{t}
@@ -184,30 +145,25 @@ export default function DetailView({
         )}
       </div>
 
-      {/* 同类精选推荐 */}
       {similar.length > 0 && (
         <section className="space-y-4 overflow-x-hidden">
-          <div className="border-b border-neutral-800 pb-3">
-            <h2 className="text-lg font-bold text-white">相似精选推荐</h2>
-          </div>
-          <div className="overflow-x-hidden">
-            <Row gutter={REC_GUTTER}>
-              {similar.map((it, i) => (
-                <Col key={it.id} {...REC_RESPONSIVE} className="mb-3 sm:mb-4">
-                  <VideoCard
-                    item={it}
-                    index={i}
-                    onClick={onCardClick}
-                    favorited={favIds.has(it.id)}
-                    onToggleFavorite={onToggleFavorite}
-                    siteName={resolveSiteName(it.siteUrl, siteNameMap)}
-                  />
-                </Col>
-              ))}
-            </Row>
-          </div>
+          <h2 className="section-title">相似精选推荐</h2>
+          <Row gutter={REC_GUTTER}>
+            {similar.map((it, i) => (
+              <Col key={it.id} {...REC_RESPONSIVE} className="mb-3 sm:mb-4">
+                <VideoCard
+                  item={it}
+                  index={i}
+                  onClick={onCardClick}
+                  favorited={favIds.has(it.id)}
+                  onToggleFavorite={onToggleFavorite}
+                  siteName={resolveSiteName(it.siteUrl, siteNameMap)}
+                />
+              </Col>
+            ))}
+          </Row>
         </section>
       )}
-    </main>
+    </PageShell>
   );
 }
