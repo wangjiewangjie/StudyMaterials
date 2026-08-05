@@ -98,7 +98,7 @@ export default function HomeView({
             {filtered.length === 0 ? (
               <Empty
                 image={(
-                  <span className="inline-flex items-center justify-center w-20 h-20 rounded accent-orb rise-in">
+                  <span className="inline-flex items-center justify-center w-20 h-20 rounded bg-ph-orange/10 border border-ph-orange/20 text-ph-orange/80 rise-in">
                     <InboxOutlined style={{ fontSize: 40 }} />
                   </span>
                 )}

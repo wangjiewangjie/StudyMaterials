@@ -49,7 +49,7 @@ export default function SyncModal({
       modalRender={(node) => (
         <div className="sync-modal-card relative w-full bg-ph-header border border-white/10 rounded-lg shadow-2xl shadow-black overflow-hidden">
           {/* 顶部装饰渐变条 */}
-          <div className="h-1 w-full" style={{ background: 'var(--g-orange-bar)' }} />
+          <div className="h-1 w-full grad-h-bar" />
           {node}
         </div>
       )}
@@ -57,7 +57,7 @@ export default function SyncModal({
       {/* Header */}
       <div className="p-5 sm:p-6 border-b border-white/5 flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="relative w-12 h-12 rounded-lg flex items-center justify-center border border-ph-orange/30" style={{ background: 'var(--g-orange-soft)' }}>
+          <div className="relative w-12 h-12 rounded-lg bg-ph-orange/10 border border-ph-orange/30 flex items-center justify-center">
             <SyncOutlined className="text-ph-orange text-xl" spin={!isDone} />
             {!isDone && (
               <div className="absolute inset-0 rounded-lg border border-ph-orange/20 animate-ping opacity-30" />
@@ -93,8 +93,8 @@ export default function SyncModal({
           </div>
           <div className="h-2.5 bg-ph-panelAlt rounded-lg overflow-hidden border border-white/5">
             <div
-              className="h-full rounded-lg relative transition-[width] duration-500 ease-out"
-              style={{ width: `${pct}%`, background: 'var(--g-orange-bar)' }}
+              className="h-full grad-h-progress rounded-lg relative transition-[width] duration-500 ease-out"
+              style={{ width: `${pct}%` }}
             >
               {!isDone && (
                 <div className="absolute inset-0 bg-white/20 sync-progress-shimmer" />

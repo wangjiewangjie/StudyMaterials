@@ -146,7 +146,7 @@ export default function SyncCenterView({
             disabled={syncing}
             icon={<PlayCircleFilled style={{ fontSize: 16 }} />}
             className={`!inline-flex !items-center !font-black !border-0 shrink-0 ${
-              syncing ? '' : 'btn-gradient !text-black'
+              syncing ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
             }`}
           >
             {syncing ? '同步中…' : '立即全量同步'}
@@ -285,7 +285,7 @@ export default function SyncCenterView({
             loading={keywordSyncing}
             icon={!keywordSyncing ? <PlusOutlined /> : undefined}
             className={`!font-black !border-0 shrink-0 ${
-              busy || !keywords.trim() ? '' : 'btn-gradient !text-black'
+              busy || !keywords.trim() ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
             }`}
           >
             {keywordSyncing ? '同步中…' : '开始同步'}

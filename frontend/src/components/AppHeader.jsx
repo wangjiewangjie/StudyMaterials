@@ -20,7 +20,7 @@ export default function AppHeader({
   onOpenDrawer,
 }) {
   return (
-    <header className="app-header fixed top-0 left-0 right-0 z-[200] w-full backdrop-blur-md border-b border-white/5">
+    <header className="app-header fixed top-0 left-0 right-0 z-[200] w-full backdrop-blur-md bg-ph-header/90">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         <Button
           type="text"
@@ -28,7 +28,7 @@ export default function AppHeader({
           className="!flex !items-center !gap-1 !p-0 !h-auto !bg-transparent !border-0 shrink-0 group"
           title="返回首页"
         >
-          <span className="brand-mark font-black italic text-base sm:text-xl px-2 py-0.5 rounded-lg tracking-tighter transition-[filter]">
+          <span className="bg-ph-orange text-black font-black italic text-base sm:text-xl px-2 py-0.5 rounded-lg tracking-tighter group-hover:bg-ph-orange-light transition-colors">
             STUDY
           </span>
           <span className="text-base sm:text-xl font-black italic tracking-tighter text-white group-hover:text-neutral-200 transition-colors hidden sm:inline">
@@ -70,7 +70,7 @@ export default function AppHeader({
             >
               <span className="hidden sm:inline">收藏</span>
               {favoritesCount > 0 && (
-                <span className="text-[10px] font-black min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-lg text-black" style={{ background: 'var(--g-orange)' }}>
+                <span className="text-[10px] font-black min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-lg bg-ph-orange text-black">
                   {favoritesCount}
                 </span>
               )}

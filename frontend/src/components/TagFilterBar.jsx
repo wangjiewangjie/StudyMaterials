@@ -130,7 +130,7 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
   ];
 
   return (
-    <div className="home-filter-bar sticky top-16 z-[190] backdrop-blur-xl border-b border-white/10">
+    <div className="home-filter-bar sticky top-16 z-[190] backdrop-blur-xl">
       <div className="tag-bar max-w-7xl mx-auto px-1 sm:px-4 lg:px-6 relative">
         <button
           type="button"

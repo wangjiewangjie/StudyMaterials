@@ -51,7 +51,7 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
             onError={() => setImgOk(false)}
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-ph-text-muted" style={{ background: 'radial-gradient(circle at 40% 35%, #2a241c 0%, #1a1a1a 55%, #121212 100%)' }}>
+          <div className="absolute inset-0 flex items-center justify-center text-ph-text-muted bg-gradient-to-br from-ph-elevated to-ph-panelAlt">
             <PictureOutlined style={{ fontSize: 30 }} />
           </div>
         )}
