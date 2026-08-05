@@ -80,7 +80,7 @@ export default function HomeView({
 
       <div className="home-page-body">
         {!loadingList && filtered.length > 0 && (
-          <div className="toolbar-meta mb-3">
+          <div className="toolbar-meta mb-2">
             <span>
               {activeTag ? (
                 <>标签 <strong>#{activeTag}</strong> · </>

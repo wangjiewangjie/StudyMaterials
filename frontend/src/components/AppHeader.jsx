@@ -20,7 +20,7 @@ export default function AppHeader({
   onOpenDrawer,
 }) {
   return (
-    <header className="app-header fixed top-0 left-0 right-0 z-[200] w-full backdrop-blur-md bg-ph-header/90">
+    <header className="app-header sticky top-0 z-[200] w-full backdrop-blur-md bg-ph-header/90 border-b border-white/5">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         <Button
           type="text"

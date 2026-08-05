@@ -38,13 +38,6 @@
   --c-text-muted: #777777;
   --c-ok: #34d399;
   --c-danger: #f87171;
-  /* 水平渐变：仅影院黑 + 纯色琥珀橙（不用于按钮） */
-  --g-h-soft: linear-gradient(90deg, #050505 0%, #0A0A0A 35%, rgba(255, 153, 0, 0.10) 72%, #050505 100%);
-  --g-h-banner: linear-gradient(90deg, #0A0A0A 0%, #121212 42%, rgba(255, 153, 0, 0.14) 78%, #0A0A0A 100%);
-  --g-h-bar: linear-gradient(90deg, #050505 0%, #FF9900 50%, #050505 100%);
-  --g-h-accent: linear-gradient(90deg, #FF9900 0%, #0A0A0A 100%);
-  --g-h-progress: linear-gradient(90deg, #0A0A0A 0%, #FF9900 100%);
-  --g-h-notice: linear-gradient(90deg, rgba(255, 153, 0, 0.14) 0%, rgba(10, 10, 10, 0.6) 100%);
 }
 
 /* ===== base ===== */
@@ -72,38 +65,24 @@ html, body {
   font-feature-settings: 'tnum';
 }
 
-/* 影院黑底 + 琥珀水平光带（装饰用，非按钮） */
+/* 影院级径向渐变光晕背景 */
 .app-shell {
   background:
-    var(--g-h-soft),
-    radial-gradient(1400px 560px at 10% -8%, rgba(255, 153, 0, 0.06), transparent 58%),
+    radial-gradient(1400px 560px at 10% -8%, rgba(255, 153, 0, 0.07), transparent 58%),
+    radial-gradient(1000px 480px at 90% 0%, rgba(255, 153, 0, 0.04), transparent 52%),
     var(--c-bg);
 }
 
-.app-header {
-  position: relative;
-}
-.app-header::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: var(--g-h-bar);
-  opacity: 0.55;
-  pointer-events: none;
-}
-
 /* ===== 页面布局 primitives ===== */
+/* 顶栏改为 sticky 后不再需要 4rem/6rem 避让，只留少量内容间距 */
 .page-main {
   width: 100%;
   max-width: 80rem;
   margin-inline: auto;
-  padding: 6rem 0.75rem 4rem;
+  padding: 1rem 0.75rem 2.5rem;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
 }
 @media (min-width: 640px) {
   .page-main { padding-left: 1.5rem; padding-right: 1.5rem; }
@@ -112,9 +91,9 @@ html, body {
   .page-main { padding-left: 2rem; padding-right: 2rem; }
 }
 
-/* 首页：顶栏占位 + 标签栏在外，内容区单独内边距 */
+/* 首页：顶栏占文档流，无需额外 padding-top */
 .home-page {
-  padding-top: 4rem;
+  padding-top: 0;
   display: flex;
   flex-direction: column;
   flex-grow: 1;
@@ -124,7 +103,7 @@ html, body {
   width: 100%;
   max-width: 80rem;
   margin-inline: auto;
-  padding: 1rem 0.75rem 2rem;
+  padding: 0.5rem 0.75rem 1.5rem;
   flex-grow: 1;
   overflow-x: hidden;
 }
@@ -140,21 +119,11 @@ html, body {
   overflow: hidden;
   border-radius: var(--r-md);
   border: 1px solid var(--c-border-soft);
-  background: var(--g-h-banner);
+  background: linear-gradient(135deg, var(--c-panel-alt) 0%, var(--c-card) 48%, var(--c-header) 100%);
   padding: 1.5rem;
 }
 @media (min-width: 640px) {
   .page-banner { padding: 2rem; }
-}
-.page-banner::before {
-  content: '';
-  position: absolute;
-  inset-inline: 0;
-  top: 0;
-  height: 2px;
-  background: var(--g-h-bar);
-  opacity: 0.85;
-  pointer-events: none;
 }
 .page-banner::after {
   content: '';
@@ -164,7 +133,7 @@ html, body {
   width: 16rem;
   height: 16rem;
   border-radius: var(--r-md);
-  background: rgba(255, 153, 0, 0.08);
+  background: rgba(255, 153, 0, 0.09);
   filter: blur(48px);
   transform: translate(30%, -45%);
   pointer-events: none;
@@ -225,7 +194,7 @@ html, body {
   width: 3px;
   height: 1.25rem;
   border-radius: var(--r-sm);
-  background: var(--g-h-accent);
+  background: var(--c-orange);
   flex-shrink: 0;
 }
 
@@ -235,17 +204,9 @@ html, body {
   gap: 0.75rem;
   padding: 1rem;
   border-radius: var(--r-md);
-  background: var(--g-h-notice);
+  background: var(--c-orange-dim);
   border: 1px solid var(--c-orange-border);
   color: var(--c-orange);
-}
-
-/* 装饰性水平渐变条（进度 / 顶饰），禁止用在按钮上 */
-.grad-h-bar {
-  background: var(--g-h-bar);
-}
-.grad-h-progress {
-  background: var(--g-h-progress);
 }
 
 .toolbar-meta {
@@ -727,10 +688,7 @@ html, body {
 }
 
 .home-filter-bar {
-  background: linear-gradient(90deg, rgba(10, 10, 10, 0.96) 0%, rgba(10, 10, 10, 0.92) 55%, rgba(255, 153, 0, 0.06) 100%);
-  border-bottom: 1px solid transparent;
-  border-image: linear-gradient(90deg, #050505 0%, #FF9900 50%, #050505 100%) 1;
-  border-image-slice: 1;
+  background: rgba(10, 10, 10, 0.95);
 }
 
 .tag-bar {

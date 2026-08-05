@@ -49,7 +49,7 @@ export default function SyncModal({
       modalRender={(node) => (
         <div className="sync-modal-card relative w-full bg-ph-header border border-white/10 rounded-lg shadow-2xl shadow-black overflow-hidden">
           {/* 顶部装饰渐变条 */}
-          <div className="h-1 w-full grad-h-bar" />
+          <div className="h-1 w-full bg-gradient-to-r from-ph-orange via-ph-orange-light to-ph-orange" />
           {node}
         </div>
       )}
@@ -93,7 +93,7 @@ export default function SyncModal({
           </div>
           <div className="h-2.5 bg-ph-panelAlt rounded-lg overflow-hidden border border-white/5">
             <div
-              className="h-full grad-h-progress rounded-lg relative transition-[width] duration-500 ease-out"
+              className="h-full bg-gradient-to-r from-ph-orange to-ph-orange-light rounded-lg relative transition-[width] duration-500 ease-out"
               style={{ width: `${pct}%` }}
             >
               {!isDone && (
