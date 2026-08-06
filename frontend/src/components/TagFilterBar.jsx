@@ -124,6 +124,8 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
+  if (!tags.length) return null;
+
   const chips = [
     { key: '__all__', label: '全部', value: '' },
     ...tags.map(({ tag }) => ({ key: tag, label: tag, value: tag })),

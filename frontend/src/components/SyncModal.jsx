@@ -4,8 +4,15 @@ import {
   SyncOutlined, CloseOutlined, ClockCircleOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons';
 
-// 同步进度模态框：对齐设计稿，居中展示总进度 / 统计 / 实时日志。
-// 受控组件：open / onCancel / onBackground 由父组件管理；进度数据从 useSync 传入。
+function formatElapsed(ms) {
+  const sec = Math.floor((ms || 0) / 1000);
+  const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+  const s = String(sec % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+// 同步进度模态框：总进度 / 统计 / 实时日志 / 耗时。
 export default function SyncModal({
   open,
   status,
@@ -18,22 +25,13 @@ export default function SyncModal({
 }) {
   const logRef = useRef(null);
 
-  // 日志追加时自动滚动到底部
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [syncLogs]);
 
-  // 已运行时长格式化 HH:MM:SS
-  const elapsedLabel = (() => {
-    const sec = Math.floor(elapsed / 1000);
-    const h = String(Math.floor(sec / 3600)).padStart(2, '0');
-    const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
-    const s = String(sec % 60).padStart(2, '0');
-    return `${h}:${m}:${s}`;
-  })();
-
+  const elapsedLabel = formatElapsed(elapsed);
   const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
   const isDone = pct >= 100;
 
@@ -48,28 +46,25 @@ export default function SyncModal({
       closable={false}
       modalRender={(node) => (
         <div className="sync-modal-card relative w-full bg-ph-header border border-white/10 rounded-lg shadow-2xl shadow-black overflow-hidden">
-          {/* 顶部装饰渐变条 */}
           <div className="h-1 w-full bg-gradient-to-r from-ph-orange via-ph-orange-light to-ph-orange" />
           {node}
         </div>
       )}
     >
-      {/* Header */}
       <div className="p-5 sm:p-6 border-b border-white/5 flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="relative w-12 h-12 rounded-lg bg-ph-orange/10 border border-ph-orange/30 flex items-center justify-center">
-            <SyncOutlined className="text-ph-orange text-xl" spin={!isDone} />
-            {!isDone && (
-              <div className="absolute inset-0 rounded-lg border border-ph-orange/20 animate-ping opacity-30" />
-            )}
-          </div>
-          <div>
-            <h2 className="text-lg sm:text-xl font-black text-white">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <SyncOutlined className="text-ph-orange text-xl mt-0.5 shrink-0" spin={!isDone} />
+          <div className="min-w-0">
+            <h2 className="text-lg sm:text-xl font-black text-white m-0">
               {isDone ? '同步已完成' : '正在同步数据索引'}
             </h2>
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-gray-400 mt-1 mb-0">
               {isDone ? '本次同步任务已结束，可关闭窗口' : '请勿关闭窗口，后台正在拉取最新节点数据'}
             </p>
+            <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-ph-orange font-bold tabular-nums">
+              <ClockCircleOutlined style={{ fontSize: 12 }} />
+              <span>已运行 {elapsedLabel}</span>
+            </div>
           </div>
         </div>
         <Button
@@ -77,15 +72,13 @@ export default function SyncModal({
           size="middle"
           onClick={onBackground}
           icon={<CloseOutlined style={{ fontSize: 14 }} />}
-          className="app-btn-icon !bg-white/5 hover:!bg-white/10 !border !border-white/10 !text-gray-400 hover:!text-white shrink-0"
+          className="!text-gray-400 hover:!text-white shrink-0 !border-0 !bg-transparent"
           aria-label="后台运行"
           title="后台运行"
         />
       </div>
 
-      {/* Body */}
       <div className="p-5 sm:p-6 space-y-6">
-        {/* 总进度条 */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs">
             <span className="font-bold text-white">{status || (isDone ? '同步完成' : '正在同步…')}</span>
@@ -105,11 +98,10 @@ export default function SyncModal({
             <span>
               已处理 {syncStats.added + syncStats.skipped} / {syncStats.total || '—'} 条索引
             </span>
-            <span>{isDone ? '已完成' : '运行中'}</span>
+            <span className="tabular-nums">{isDone ? '已完成' : `运行中 · ${elapsedLabel}`}</span>
           </div>
         </div>
 
-        {/* 统计四宫格 */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="bg-[#121212] border border-white/5 rounded-lg p-3 text-center">
             <div className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">新增</div>
@@ -135,7 +127,6 @@ export default function SyncModal({
           </div>
         </div>
 
-        {/* 安全提示 */}
         <div className="notice-soft !p-3">
           <SafetyCertificateOutlined className="text-ph-orange shrink-0" style={{ fontSize: 14 }} />
           <p className="text-[11px] text-gray-400 leading-tight m-0">
@@ -143,7 +134,6 @@ export default function SyncModal({
           </p>
         </div>
 
-        {/* 实时日志 */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-white">实时日志</span>
@@ -161,11 +151,10 @@ export default function SyncModal({
         </div>
       </div>
 
-      {/* Footer */}
       <div className="p-5 sm:p-6 border-t border-white/5 bg-[#121212]/50 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[11px] text-gray-500">
-          <ClockCircleOutlined style={{ fontSize: 12 }} />
-          <span>已运行 <span className="tabular-nums">{elapsedLabel}</span></span>
+        <div className="flex items-center gap-2 text-sm text-ph-orange font-bold tabular-nums">
+          <ClockCircleOutlined style={{ fontSize: 14 }} />
+          <span>耗时 {elapsedLabel}</span>
         </div>
         <div className="flex items-center gap-2">
           <Button

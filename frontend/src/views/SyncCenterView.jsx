@@ -57,6 +57,7 @@ export default function SyncCenterView({
   syncHistory,
   lastSyncAt,
   syncing,
+  elapsed = 0,
   onTriggerSync,
   keywordSyncing,
   keywordResults,
@@ -84,6 +85,13 @@ export default function SyncCenterView({
     return `${hh}:${mm}`;
   })();
   const lastSyncDate = lastSyncAt ? formatDate(lastSyncAt) : '—';
+
+  const syncElapsedLabel = (() => {
+    const sec = Math.floor((elapsed || 0) / 1000);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  })();
 
   const columns = [
     {
@@ -149,7 +157,7 @@ export default function SyncCenterView({
               syncing ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
             }`}
           >
-            {syncing ? '同步中…' : '立即全量同步'}
+            {syncing ? `同步中 ${syncElapsedLabel}` : '立即全量同步'}
           </Button>
         )}
       />
@@ -196,8 +204,8 @@ export default function SyncCenterView({
             value={syncing ? '运行中' : '就绪'}
             valueClass={syncing ? 'text-ph-orange' : 'text-emerald-400'}
             hint={(
-              <div className="text-[10px] text-ph-text-muted font-bold">
-                {syncing ? '正在拉取' : '队列空闲'}
+              <div className="text-[10px] text-ph-text-muted font-bold tabular-nums">
+                {syncing ? `已运行 ${syncElapsedLabel}` : '队列空闲'}
               </div>
             )}
           />
@@ -224,10 +232,8 @@ export default function SyncCenterView({
               <Col key={src.key} {...SRC_RESPONSIVE} className="mb-3 sm:mb-4">
                 <div className="surface-card p-4 space-y-3 h-full">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="page-banner-icon !w-9 !h-9 shrink-0">
-                        <DatabaseOutlined style={{ fontSize: 14 }} />
-                      </div>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <DatabaseOutlined className="text-ph-orange shrink-0" style={{ fontSize: 16 }} />
                       <div className="min-w-0">
                         <div className="text-sm font-bold text-white truncate">{src.name}</div>
                         <div className="text-[10px] text-ph-text-muted font-mono truncate">{src.url}</div>

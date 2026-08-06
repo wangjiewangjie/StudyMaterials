@@ -1,5 +1,5 @@
 // server.js — 本地 Web 服务：React 前端 + API + HLS CORS 代理。
-// 启动：node server.js（默认 http://localhost:3000）
+// 启动：node server.js（默认 http://localhost:9999）
 // 端口被占用时自动递增，实际端口写入 .server-port
 
 const express = require('express');
@@ -15,7 +15,7 @@ const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
 const { matchesExclude, filterExcludedArticles } = require('./lib/exclude');
 
-const BASE_PORT = parseInt(process.env.PORT, 10) || 3000;
+const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
 const PORT_FILE = path.join(__dirname, '.server-port');
 
 /** 本机局域网 IPv4（排除回环与内部虚拟网卡） */
@@ -155,16 +155,22 @@ function writeFavorites(list) {
 }
 
 function toVideoItem(a) {
+  const videos = Array.isArray(a.videos) && a.videos.length
+    ? a.videos
+    : (a.video ? [a.video] : []);
   return {
     id: a.id,
     title: a.title || '',
     url: a.url,
     siteUrl: a.siteUrl || null,
     coverUrl: a.coverUrl || null,
-    video: a.video || null,
+    video: videos[0] || a.video || null,
+    videos,
     tags: a.tags || [],
     category: a.category || null,
     datePublished: a.datePublished || null,
+    content: a.content || '',
+    images: Array.isArray(a.images) ? a.images : [],
     favoritedAt: a.favoritedAt || null,
   };
 }
@@ -408,7 +414,35 @@ app.get('/api/cover/:id', async (req, res) => {
   }
 });
 
-// 刷新单条 m3u8（auth_key 会过期），并更新标签/分类
+/** 详情配图代理（与封面相同解密逻辑） */
+app.get('/api/image/:id/:index', async (req, res) => {
+  const found = findById(req.params.id);
+  const item = found && found.item;
+  const images = (item && Array.isArray(item.images)) ? item.images : [];
+  const idx = Number(req.params.index);
+  const imageUrl = images[idx];
+  if (!imageUrl) return res.status(404).send('no image');
+  try {
+    const refererSite = refererFor(item);
+    const upstream = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: { 'User-Agent': UA, Referer: refererSite + '/' },
+    });
+    let buf = Buffer.from(upstream.data);
+    if (!sniffImage(buf).valid) {
+      buf = await decryptBuffer(buf);
+    }
+    res.set('Content-Type', sniffImage(buf).contentType);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(buf);
+  } catch (err) {
+    const code = err.response && err.response.status ? err.response.status : 502;
+    res.status(code).send('image error: ' + err.message);
+  }
+});
+
+// 刷新单条 m3u8（auth_key 会过期），并更新标签/分类/正文/配图/全部视频
 app.get('/api/refresh/:id', async (req, res) => {
   const found = findById(req.params.id);
   if (!found) return res.status(404).json({ error: 'not found' });
@@ -422,21 +456,33 @@ app.get('/api/refresh/:id', async (req, res) => {
     });
     const detail = parseDetailPage(r.data);
     const patch = {};
-    if (detail.video && detail.video.url) {
-      if (detail.video.needsResolve) {
-        const resolved = await resolvePlayerUrl(refererSite, detail.video.url, (m) => console.log(m));
-        if (resolved) {
-          detail.video.url = resolved;
-          detail.video.needsResolve = false;
-        } else {
-          detail.video = null;
+
+    const rawVideos = (detail.videos && detail.videos.length)
+      ? detail.videos
+      : (detail.video ? [detail.video] : []);
+    if (rawVideos.length) {
+      const resolvedVideos = [];
+      for (const v of rawVideos) {
+        const entry = { ...v };
+        if (entry.needsResolve) {
+          const resolved = await resolvePlayerUrl(refererSite, entry.url, (m) => console.log(m));
+          if (resolved) {
+            entry.url = resolved;
+            entry.needsResolve = false;
+            resolvedVideos.push(entry);
+          }
+        } else if (entry.url) {
+          resolvedVideos.push(entry);
         }
       }
-      if (detail.video) {
-        target.video = detail.video;
-        patch.video = detail.video;
+      if (resolvedVideos.length) {
+        target.videos = resolvedVideos;
+        target.video = resolvedVideos[0];
+        patch.videos = resolvedVideos;
+        patch.video = resolvedVideos[0];
       }
     }
+
     if (detail.tags && detail.tags.length) {
       target.tags = detail.tags;
       patch.tags = detail.tags;
@@ -457,6 +503,14 @@ app.get('/api/refresh/:id', async (req, res) => {
       target.coverUrl = detail.coverUrl;
       patch.coverUrl = detail.coverUrl;
     }
+    if (detail.content) {
+      target.content = detail.content;
+      patch.content = detail.content;
+    }
+    if (detail.images && detail.images.length) {
+      target.images = detail.images;
+      patch.images = detail.images;
+    }
 
     if (Object.keys(patch).length) {
       if (found.source === 'index') {
@@ -467,7 +521,16 @@ app.get('/api/refresh/:id', async (req, res) => {
         writeFavorites(getFavorites());
       }
     }
-    res.json({ ok: true, video: target.video, tags: target.tags || [], category: target.category || null, datePublished: target.datePublished || null });
+    res.json({
+      ok: true,
+      video: target.video,
+      videos: target.videos || (target.video ? [target.video] : []),
+      tags: target.tags || [],
+      category: target.category || null,
+      datePublished: target.datePublished || null,
+      content: target.content || '',
+      images: target.images || [],
+    });
   } catch (err) {
     const info = requestErrorInfo(err, target.url);
     console.error('[refresh]', req.params.id, info);
@@ -768,8 +831,9 @@ app.get('*', (req, res) => {
     console.log(`  索引 ${getIndex().length} 条 · 收藏 ${getFavorites().length} 条`);
     console.log('');
 
-    // 启动后静默后台爬取，只打印起止摘要
+    // 启动后静默后台爬取，打印起止摘要与耗时
     (async () => {
+      const t0 = Date.now();
       try {
         console.log('  后台同步中…');
         await crawl({
@@ -781,9 +845,11 @@ app.get('*', (req, res) => {
           onLog: () => {},
         });
         onIndexChanged();
-        console.log(`  同步完成，共 ${getIndex().length} 条\n`);
+        const sec = ((Date.now() - t0) / 1000).toFixed(1);
+        console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s\n`);
       } catch (e) {
-        console.warn('  同步失败:', e.message);
+        const sec = ((Date.now() - t0) / 1000).toFixed(1);
+        console.warn(`  同步失败（耗时 ${sec}s）:`, e.message);
       }
     })();
   });

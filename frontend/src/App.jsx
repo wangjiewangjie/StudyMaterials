@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { App as AntdApp, Drawer, Button } from 'antd';
 import {
   StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
@@ -23,6 +23,10 @@ const VIEW = {
 
 const MOBILE_BREAKPOINT = 768;
 
+function historyState(view, selectedId = null) {
+  return { view, selectedId };
+}
+
 export default function App() {
   const { message } = AntdApp.useApp();
   const [view, setView] = useState(VIEW.HOME);
@@ -36,10 +40,26 @@ export default function App() {
     typeof window !== 'undefined' ? window.innerWidth < MOBILE_BREAKPOINT : false
   );
 
+  const scrollPositions = useRef({
+    [VIEW.HOME]: 0,
+    [VIEW.FAVORITES]: 0,
+    [VIEW.SYNC_CENTER]: 0,
+  });
+  const pendingScrollY = useRef(null);
+  const viewRef = useRef(view);
+  const selectedRef = useRef(selected);
+  const itemsRef = useRef([]);
+  const favoritesRef = useRef([]);
+
   const {
     items, favorites, favIds, sites, siteCounts, tagList, loadingList,
     loadVideos, toggleFavorite, clearAllFavorites,
   } = useAppData(message);
+
+  viewRef.current = view;
+  selectedRef.current = selected;
+  itemsRef.current = items;
+  favoritesRef.current = favorites;
 
   const handleSyncDone = useCallback(() => {
     loadVideos(query.trim());
@@ -51,6 +71,85 @@ export default function App() {
     keywordSyncing, keywordResults,
     startKeywordSync, cancelKeywordSync,
   } = useSync(message, handleSyncDone);
+
+  const saveScroll = useCallback((forView) => {
+    if (forView && forView !== VIEW.DETAIL) {
+      scrollPositions.current[forView] = window.scrollY;
+    }
+  }, []);
+
+  const findItemById = useCallback((id) => {
+    if (!id) return null;
+    return itemsRef.current.find((it) => it.id === id)
+      || favoritesRef.current.find((it) => it.id === id)
+      || null;
+  }, []);
+
+  const applyViewState = useCallback((nextView, nextSelected, { restoreScroll = false, scrollToTop = false } = {}) => {
+    setView(nextView);
+    setSelected(nextSelected);
+    if (scrollToTop) {
+      pendingScrollY.current = 0;
+    } else if (restoreScroll && nextView !== VIEW.DETAIL) {
+      pendingScrollY.current = scrollPositions.current[nextView] || 0;
+    } else {
+      pendingScrollY.current = null;
+    }
+  }, []);
+
+  const pushView = useCallback((nextView, nextSelected = null, options = {}) => {
+    saveScroll(viewRef.current);
+    window.history.pushState(
+      historyState(nextView, nextSelected?.id ?? null),
+      ''
+    );
+    const scrollToTop = options.scrollToTop ?? (nextView === VIEW.DETAIL);
+    applyViewState(nextView, nextSelected, {
+      restoreScroll: !scrollToTop && nextView !== VIEW.DETAIL,
+      scrollToTop,
+    });
+  }, [saveScroll, applyViewState]);
+
+  // 初始化 history，并响应系统返回 / 前进
+  useEffect(() => {
+    const current = window.history.state;
+    if (!current || !current.view) {
+      window.history.replaceState(historyState(VIEW.HOME), '');
+    }
+
+    const onPopState = (event) => {
+      const state = event.state && event.state.view
+        ? event.state
+        : historyState(VIEW.HOME);
+
+      // 离开当前页面前保存滚动（详情页不缓存）
+      saveScroll(viewRef.current);
+
+      if (state.view === VIEW.DETAIL) {
+        const item = findItemById(state.selectedId) || selectedRef.current;
+        if (item) {
+          applyViewState(VIEW.DETAIL, item, { scrollToTop: true });
+          return;
+        }
+        // 找不到条目时退回首页
+        applyViewState(VIEW.HOME, null, { restoreScroll: true });
+        return;
+      }
+
+      applyViewState(state.view, null, { restoreScroll: true });
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [saveScroll, findItemById, applyViewState]);
+
+  // 视图切换后恢复列表滚动位置
+  useLayoutEffect(() => {
+    if (pendingScrollY.current == null) return;
+    const y = pendingScrollY.current;
+    pendingScrollY.current = null;
+    window.scrollTo({ top: y, behavior: 'auto' });
+  }, [view, selected]);
 
   useEffect(() => {
     const onResize = () => {
@@ -80,48 +179,55 @@ export default function App() {
   }, [cancelSync]);
 
   const handleCardClick = useCallback((item) => {
-    setSelected(item);
-    setView(VIEW.DETAIL);
-    window.scrollTo({ top: 0, behavior: 'auto' });
-  }, []);
+    pushView(VIEW.DETAIL, item, { scrollToTop: true });
+  }, [pushView]);
 
   const handleHomeClick = useCallback(() => {
-    setView(VIEW.HOME);
-    setSelected(null);
+    if (viewRef.current !== VIEW.HOME) {
+      saveScroll(viewRef.current);
+      window.history.pushState(historyState(VIEW.HOME), '');
+    }
     setActiveTag('');
     setQuery('');
     loadVideos('');
     setDrawerOpen(false);
-  }, [loadVideos]);
+    applyViewState(VIEW.HOME, null, { scrollToTop: true });
+  }, [loadVideos, saveScroll, applyViewState]);
 
   const handleFavoritesClick = useCallback(() => {
-    if (view === VIEW.FAVORITES) {
-      setView(VIEW.HOME);
-    } else {
-      setView(VIEW.FAVORITES);
-      setFavQuery('');
-    }
-    setSelected(null);
     setDrawerOpen(false);
-  }, [view]);
+    if (viewRef.current === VIEW.FAVORITES) {
+      saveScroll(VIEW.FAVORITES);
+      window.history.pushState(historyState(VIEW.HOME), '');
+      applyViewState(VIEW.HOME, null, { restoreScroll: true });
+      return;
+    }
+    setFavQuery('');
+    pushView(VIEW.FAVORITES, null, { scrollToTop: false });
+  }, [saveScroll, applyViewState, pushView]);
 
   const handleSyncCenterClick = useCallback(() => {
-    setView(VIEW.SYNC_CENTER);
-    setSelected(null);
     setDrawerOpen(false);
-  }, []);
+    if (viewRef.current === VIEW.SYNC_CENTER) return;
+    pushView(VIEW.SYNC_CENTER, null, { scrollToTop: true });
+  }, [pushView]);
 
   const handleBack = useCallback(() => {
-    setView(VIEW.HOME);
-    setSelected(null);
-  }, []);
+    // 走浏览器历史，系统返回与按钮返回行为一致，并恢复上一页滚动
+    if (window.history.state?.view === VIEW.DETAIL) {
+      window.history.back();
+      return;
+    }
+    applyViewState(VIEW.HOME, null, { restoreScroll: true });
+  }, [applyViewState]);
 
   const handleTagClick = useCallback((tag) => {
-    setView(VIEW.HOME);
-    setSelected(null);
+    saveScroll(viewRef.current);
+    window.history.pushState(historyState(VIEW.HOME), '');
     setActiveTag(tag);
     message.info(`已切换到标签「${tag}」`);
-  }, [message]);
+    applyViewState(VIEW.HOME, null, { scrollToTop: true });
+  }, [message, saveScroll, applyViewState]);
 
   const handleSearch = useCallback(() => {
     setActiveTag('');
@@ -160,6 +266,7 @@ export default function App() {
         onSyncClick={handleStartSync}
         onHomeClick={handleHomeClick}
         syncing={syncing}
+        elapsed={elapsed}
         isMobile={isMobile}
         onOpenDrawer={() => setDrawerOpen(true)}
       />
@@ -214,6 +321,7 @@ export default function App() {
           syncHistory={syncHistory}
           lastSyncAt={lastSyncAt}
           syncing={syncing}
+          elapsed={elapsed}
           onTriggerSync={handleStartSync}
           // 关键词同步
           keywordSyncing={keywordSyncing}
@@ -297,7 +405,7 @@ export default function App() {
                 : '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
             }`}
           >
-            {syncing ? '同步中…' : '立即同步'}
+            {syncing ? `同步中 ${Math.floor(elapsed / 1000 / 60)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, '0')}` : '立即同步'}
           </Button>
         </div>
       </Drawer>

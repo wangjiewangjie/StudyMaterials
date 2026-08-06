@@ -231,11 +231,116 @@ function parseListPage(html, siteUrl) {
 const JSON_LD_PUB_RE = /"datePublished"\s*:\s*"([^"]+)"/;
 const JSON_LD_MOD_RE = /"dateModified"\s*:\s*"([^"]+)"/;
 
+/** 详情页正文广告 / 导航噪声（过滤掉） */
+const DETAIL_TEXT_NOISE_RE = /91吃瓜最新地址|91吃瓜永久|91vip\d*|91cg\d|建议使用\s*Chrome|请截图保存|下载\s*91|官方APP|关键词：|^⬇️|91吃瓜推荐|年度最强影院|点击加入|著作权归|转载请注明/i;
+
+function parseVideoFromDplayer($div) {
+  const cfg = $div.attr('data-config');
+  if (!cfg) return null;
+  try {
+    const obj = JSON.parse(cfg);
+    let video = null;
+    // (a) obj.video.url = direct m3u8  (b) obj.url = player endpoint / direct
+    if (obj.video && obj.video.url) {
+      video = {
+        url: obj.video.url,
+        type: obj.video.type || 'hls',
+        thumbnails: obj.video.thumbnails || null,
+      };
+    } else if (obj.url) {
+      video = {
+        url: obj.url,
+        type: obj.type || 'hls',
+        thumbnails: obj.poster || null,
+        needsResolve: /\/action\//.test(obj.url),
+      };
+    }
+    if (!video) return null;
+    const title = ($div.attr('data-video_title') || '').trim() || null;
+    if (title) video.title = title;
+    return video;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** 详情正文容器（兼容 post-card / xqbj / text-content 等主题） */
+const DETAIL_BODY_SELECTORS = [
+  '.post-content',
+  'div[itemprop="articleBody"]',
+  '.article-content',
+  '.entry-content',
+  '.text.text-content',
+  '.text-content',
+].join(', ');
+
+/** 从 img 节点解析真实图片 URL（懒加载属性优先） */
+function resolveImgUrl($img) {
+  const raw = (
+    $img.attr('data-xkrkllgl')
+    || $img.attr('z-image-loader-url')
+    || $img.attr('data-original')
+    || $img.attr('data-src')
+    || $img.attr('data-url')
+    || $img.attr('src')
+    || ''
+  ).trim();
+  if (!raw || !/^https?:\/\//i.test(raw)) return null;
+  if (/\.gif(\?|$)/i.test(raw)) return null;
+  if (/\/usr\/(themes|plugins)\//i.test(raw)) return null;
+  if (/zw\.png/i.test(raw)) return null;
+  if (/\/hc\d+\/uploads\/default\/other\//i.test(raw)) return null; // 站内广告图
+  const alt = `${$img.attr('alt') || ''} ${$img.attr('title') || ''}`;
+  if (/最新地址|PDF|二维码|QQ群|扫码/i.test(alt)) return null;
+  return raw;
+}
+
+/** 提取详情正文文字与配图（排除广告按钮、站内导航、占位图） */
+function extractDetailBody($) {
+  const $root = $(DETAIL_BODY_SELECTORS).first();
+  if (!$root.length) return { content: '', images: [] };
+
+  const images = [];
+  const seenImg = new Set();
+  $root.find('img').each((_, img) => {
+    const raw = resolveImgUrl($(img));
+    if (!raw || seenImg.has(raw)) return;
+    seenImg.add(raw);
+    images.push(raw);
+  });
+  // 详情配图过多时截断（避免相关推荐/瀑布流把索引撑爆）
+  if (images.length > 24) images.length = 24;
+
+  const $clone = $root.clone();
+  $clone.find([
+    '.article-ads-btn', '.dplayer', 'script', 'style',
+    '.content-copyright', '.tags', 'table', 'blockquote',
+    '.content-tabs', '.article-bottom-apps', '.post-near',
+  ].join(',')).remove();
+
+  const parts = [];
+  let skipFaq = false;
+  $clone.find('p, h2, h3').each((_, el) => {
+    const t = $(el).text().replace(/\s+/g, ' ').trim();
+    if (!t || t.length < 2) return;
+    if (/常见疑问解答|FAQ/i.test(t)) { skipFaq = true; return; }
+    if (skipFaq && /^(Q[：:]|A[：:]|问[：:]|答[：:])/i.test(t)) return;
+    if (skipFaq && !/^(Q[：:]|A[：:]|问[：:]|答[：:])/i.test(t) && t.length > 40) skipFaq = false;
+    if (skipFaq) return;
+    if (DETAIL_TEXT_NOISE_RE.test(t)) return;
+    if (/可能你会感兴趣|⬇️/.test(t)) return;
+    parts.push(t);
+  });
+
+  return { content: parts.join('\n\n'), images };
+}
+
 function parseDetailPage(html) {
   const $ = cheerio.load(html);
   const result = {
-    title: null, video: null, tags: [], category: null,
+    title: null, video: null, videos: [], tags: [], category: null,
     coverUrl: null, datePublished: null, dateModified: null,
+    content: '', images: [],
   };
 
   // Title — try multiple selectors used by different themes
@@ -284,7 +389,8 @@ function parseDetailPage(html) {
     result.category = acceptCategory($crumb.eq(1).text());
   }
 
-  // Video + tags + category from .dplayer[data-config]
+  // 全部 .dplayer 视频（不再只取第一个）
+  const seenVideoUrl = new Set();
   $('.dplayer').each((_, div) => {
     const $div = $(div);
     const cfg = $div.attr('data-config');
@@ -306,34 +412,31 @@ function parseDetailPage(html) {
       result.category = acceptCategory($div.attr('data-video_type_name'));
     }
 
-    // Video URL — two data-config shapes:
-    //   (a) obj.video.url = direct m3u8 (bite, breast)
-    //   (b) obj.url = player endpoint or direct url (d1ve)
-    if (result.video) return;
-    try {
-      const obj = JSON.parse(cfg);
-      if (obj.video && obj.video.url) {
-        result.video = {
-          url: obj.video.url,
-          type: obj.video.type || 'hls',
-          thumbnails: obj.video.thumbnails || null,
-        };
-      } else if (obj.url) {
-        result.video = {
-          url: obj.url,
-          type: obj.type || 'hls',
-          thumbnails: obj.poster || null,
-          needsResolve: /\/action\//.test(obj.url),
-        };
-      }
-    } catch (e) {
-      /* skip unparseable config */
-    }
+    const video = parseVideoFromDplayer($div);
+    if (!video || !video.url || seenVideoUrl.has(video.url)) return;
+    seenVideoUrl.add(video.url);
+    result.videos.push(video);
   });
+  result.video = result.videos[0] || null;
+
+  const body = extractDetailBody($);
+  result.content = body.content;
+  result.images = body.images;
 
   // 生成时过滤站点名称/品牌相关标签
   result.tags = filterSiteBrandTags(Array.from(tagSet), SITE_CONFIGS);
   return result;
+}
+
+/** 解析 player 接口得到真实 m3u8，就地更新 video 对象；失败则返回 null */
+async function resolveVideoEntry(siteUrl, video, log) {
+  if (!video || !video.url) return null;
+  if (!video.needsResolve) return video;
+  const resolved = await resolvePlayerUrl(siteUrl, video.url, log);
+  if (!resolved) return null;
+  video.url = resolved;
+  video.needsResolve = false;
+  return video;
 }
 
 /** 从 player 接口响应提取 m3u8（兼容 data 为字符串或数组） */
@@ -725,32 +828,34 @@ async function crawl(opts = {}) {
     return { added: 0, total: existing.length, crawled: 0 };
   }
 
-  // 2. Fetch detail pages -> extract video URLs + tags + category + real cover
+  // 2. Fetch detail pages -> extract video URLs + tags + category + real cover + body
   log('--- Fetching detail pages ---');
   await mapWithConcurrency(newArticles, concurrency, async (a) => {
     try {
       const res = await getWithRetry(a.url, client, 3, headersFor(a.siteUrl));
       const detail = parseDetailPage(res.data);
       if (detail.title && !a.title) a.title = detail.title;
-      a.video = detail.video;
       if (detail.tags && detail.tags.length) a.tags = detail.tags;
       if (detail.category) a.category = detail.category;
       if (detail.coverUrl) a.coverUrl = detail.coverUrl;
       if (detail.datePublished) a.datePublished = detail.datePublished;
       if (detail.dateModified) a.dateModified = detail.dateModified;
+      if (detail.content) a.content = detail.content;
+      if (detail.images && detail.images.length) a.images = detail.images;
 
-      // Resolve player endpoint URLs (d1ve-style) to get the real m3u8 URL
-      if (a.video && a.video.needsResolve) {
-        const resolved = await resolvePlayerUrl(a.siteUrl, a.video.url, log);
-        if (resolved) {
-          a.video.url = resolved;
-          a.video.needsResolve = false;
-        } else {
-          a.video = null; // can't play without a real m3u8 URL
-        }
+      // 解析全部播放器；needsResolve 的逐个换真实 m3u8
+      const rawVideos = (detail.videos && detail.videos.length)
+        ? detail.videos
+        : (detail.video ? [detail.video] : []);
+      const resolvedVideos = [];
+      for (const v of rawVideos) {
+        const ok = await resolveVideoEntry(a.siteUrl, { ...v }, log);
+        if (ok) resolvedVideos.push(ok);
       }
+      a.videos = resolvedVideos;
+      a.video = resolvedVideos[0] || null;
 
-      log(`  [detail] ${a.id} ${a.video ? '+' : '-'} video | ${(a.title || '').slice(0, 40)}`);
+      log(`  [detail] ${a.id} ${resolvedVideos.length} video(s) | imgs ${ (a.images || []).length } | ${(a.title || '').slice(0, 40)}`);
     } catch (err) {
       log(`  [detail] ${a.id} failed: ${err.message}`);
     }

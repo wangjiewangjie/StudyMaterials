@@ -256,7 +256,7 @@ function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
   return art;
 }
 
-export default function VideoPlayer({ item, onTags }) {
+export default function VideoPlayer({ item, video: videoProp, onTags }) {
   const containerRef = useRef(null);
   const artRef = useRef(null);
   const onTagsRef = useRef(onTags);
@@ -266,6 +266,7 @@ export default function VideoPlayer({ item, onTags }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [loadingTip, setLoadingTip] = useState('正在准备播放…');
 
+  const activeVideo = videoProp || (item && item.video) || null;
   const posterUrl = item.coverUrl ? `/api/cover/${item.id}` : '';
   onTagsRef.current = onTags;
 
@@ -289,13 +290,13 @@ export default function VideoPlayer({ item, onTags }) {
     setErrorMsg('');
     setLoadingTip('正在刷新播放地址…');
 
-    let m3u8Url = item.video && item.video.url;
+    let m3u8Url = activeVideo && activeVideo.url;
     if (!m3u8Url) {
       setPhase('none');
       return;
     }
 
-    // 刷新 m3u8 URL（鉴权 key 可能已过期），同时获取最新标签/日期
+    // 刷新 m3u8 URL（鉴权 key 可能已过期），同时获取最新标签/日期/正文
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 60000);
@@ -308,10 +309,21 @@ export default function VideoPlayer({ item, onTags }) {
         logPlayer('refresh failed', { id: item.id, status: res.status, data });
       } else if (data.ok) {
         const cb = onTagsRef.current;
-        if (typeof cb === 'function' && (data.tags || data.category || data.datePublished)) {
-          cb(data.tags || [], data.category || null, data.datePublished || null);
+        if (typeof cb === 'function') {
+          cb(data.tags || [], data.category || null, data.datePublished || null, {
+            content: data.content,
+            images: data.images,
+            videos: data.videos,
+          });
         }
-        if (data.video && data.video.url) m3u8Url = data.video.url;
+        const refreshedList = Array.isArray(data.videos) && data.videos.length
+          ? data.videos
+          : (data.video ? [data.video] : []);
+        // 尽量保持当前片段：按 url 匹配，否则按索引回退到第一个
+        const matched = refreshedList.find((v) => v && v.url && activeVideo && v.url.split('?')[0] === activeVideo.url.split('?')[0])
+          || refreshedList.find((v) => v && activeVideo && v.title && v.title === activeVideo.title)
+          || refreshedList[0];
+        if (matched && matched.url) m3u8Url = matched.url;
       } else {
         logPlayer('refresh returned not ok', { id: item.id, data });
       }
@@ -364,7 +376,7 @@ export default function VideoPlayer({ item, onTags }) {
       setErrorMsg('播放器初始化失败');
       setPhase('error');
     }
-  }, [item.id, item.video]);
+  }, [item.id, activeVideo]);
 
   useEffect(() => {
     loadSource();

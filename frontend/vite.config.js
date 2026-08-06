@@ -4,12 +4,12 @@ import fs from 'fs';
 import path from 'path';
 
 // 构建输出到 ../public/build；开发态把 /api /proxy 代理到后端。
-// 后端端口读自根目录 .server-port（由 server.js 写入），默认 3000。
+// 后端端口读自根目录 .server-port（由 server.js 写入），默认 9999。
 
 const portFile = path.resolve(__dirname, '..', '.server-port');
 const backendPort = fs.existsSync(portFile)
-  ? parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10) || 3000
-  : 3000;
+  ? parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10) || 9999
+  : 9999;
 
 export default defineConfig({
   plugins: [react()],

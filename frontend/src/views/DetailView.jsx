@@ -9,6 +9,14 @@ import PageShell from '../components/PageShell.jsx';
 import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
 import { REC_GUTTER, REC_RESPONSIVE } from '../constants/layout.js';
 
+function resolveVideos(item) {
+  if (Array.isArray(item.videos) && item.videos.length) {
+    return item.videos.filter((v) => v && v.url);
+  }
+  if (item.video && item.video.url) return [item.video];
+  return [];
+}
+
 export default function DetailView({
   item,
   items,
@@ -22,18 +30,33 @@ export default function DetailView({
 }) {
   const [localTags, setLocalTags] = useState(item.tags || []);
   const [localCategory, setLocalCategory] = useState(item.category || null);
+  const [localContent, setLocalContent] = useState(item.content || '');
+  const [localImages, setLocalImages] = useState(item.images || []);
+  const [localVideos, setLocalVideos] = useState(() => resolveVideos(item));
+  const [activeVideoIdx, setActiveVideoIdx] = useState(0);
 
   useEffect(() => {
     setLocalTags(item.tags || []);
     setLocalCategory(item.category || null);
+    setLocalContent(item.content || '');
+    setLocalImages(Array.isArray(item.images) ? item.images : []);
+    setLocalVideos(resolveVideos(item));
+    setActiveVideoIdx(0);
   }, [item]);
 
-  const hasVideo = !!(item.video && item.video.url);
+  const activeVideo = localVideos[activeVideoIdx] || null;
+  const hasVideo = !!(activeVideo && activeVideo.url);
   const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
   const sourceName = useMemo(
     () => resolveSiteName(item.siteUrl, siteNameMap),
     [item.siteUrl, siteNameMap]
   );
+
+  const contentParagraphs = useMemo(() => {
+    const raw = (localContent || '').trim();
+    if (!raw) return [];
+    return raw.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  }, [localContent]);
 
   const similar = useMemo(() => {
     if (!items || items.length === 0) return [];
@@ -55,9 +78,22 @@ export default function DetailView({
     return out;
   }, [items, item.id, localCategory, localTags]);
 
-  const handleTags = (newTags, newCategory) => {
+  const handleTags = (newTags, newCategory, _datePublished, extra) => {
     if (newTags && newTags.length) setLocalTags(newTags);
     if (newCategory) setLocalCategory(newCategory);
+    if (extra && typeof extra.content === 'string' && extra.content) {
+      setLocalContent(extra.content);
+    }
+    if (extra && Array.isArray(extra.images) && extra.images.length) {
+      setLocalImages(extra.images);
+    }
+    if (extra && Array.isArray(extra.videos) && extra.videos.length) {
+      const next = extra.videos.filter((v) => v && v.url);
+      if (next.length) {
+        setLocalVideos(next);
+        setActiveVideoIdx((i) => Math.min(i, next.length - 1));
+      }
+    }
   };
 
   return (
@@ -69,7 +105,7 @@ export default function DetailView({
           icon={<ArrowLeftOutlined style={{ fontSize: 14 }} />}
           className="!inline-flex !items-center !font-semibold !bg-ph-elevated/90 hover:!bg-ph-panelAlt !text-ph-text-primary !border-0 shrink-0"
         >
-          返回浏览列表
+          返回
         </Button>
         <div className="flex items-center gap-2 shrink-0">
           {item.url ? (
@@ -107,9 +143,32 @@ export default function DetailView({
         </div>
       </div>
 
+      {localVideos.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {localVideos.map((v, i) => (
+            <Button
+              key={`${v.url}-${i}`}
+              size="small"
+              onClick={() => setActiveVideoIdx(i)}
+              className={`!font-semibold !border ${
+                i === activeVideoIdx
+                  ? '!bg-ph-orange/15 !text-ph-orange !border-ph-orange/40'
+                  : '!bg-white/5 !text-ph-text-secondary !border-white/10 hover:!text-ph-orange'
+              }`}
+            >
+              {v.title ? `片段 ${i + 1}` : `视频 ${i + 1}`}
+            </Button>
+          ))}
+        </div>
+      )}
+
       <div className="relative z-0 w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-ph-header">
         {hasVideo ? (
-          <VideoPlayer item={item} onTags={handleTags} />
+          <VideoPlayer
+            item={item}
+            video={activeVideo}
+            onTags={handleTags}
+          />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-ph-text-muted text-sm">
             该条目暂无可播放地址
@@ -140,6 +199,40 @@ export default function DetailView({
               >
                 #{t}
               </Tag>
+            ))}
+          </div>
+        )}
+
+        {contentParagraphs.length > 0 && (
+          <div className="space-y-3 pt-1 border-t border-white/5">
+            {contentParagraphs.map((p, i) => (
+              <p
+                key={i}
+                className="m-0 text-[13px] sm:text-sm leading-relaxed text-ph-text-secondary whitespace-pre-wrap"
+              >
+                {p}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {localImages.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-white/5">
+            {localImages.map((_, i) => (
+              <a
+                key={i}
+                href={`/api/image/${item.id}/${i}`}
+                target="_blank"
+                rel="noreferrer"
+                className="block overflow-hidden rounded border border-white/5 bg-ph-elevated"
+              >
+                <img
+                  src={`/api/image/${item.id}/${i}`}
+                  alt={`配图 ${i + 1}`}
+                  loading="lazy"
+                  className="w-full h-auto object-cover block"
+                />
+              </a>
             ))}
           </div>
         )}

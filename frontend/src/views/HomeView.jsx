@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { Spin, Empty, Typography, Row, Col } from 'antd';
-import { InboxOutlined } from '@ant-design/icons';
 import VideoCard from '../components/VideoCard.jsx';
 import TagFilterBar from '../components/TagFilterBar.jsx';
 import PageShell from '../components/PageShell.jsx';
@@ -72,11 +71,13 @@ export default function HomeView({
 
   return (
     <PageShell home>
-      <TagFilterBar
-        tags={tagList}
-        activeTag={activeTag}
-        onTagChange={onTagChange}
-      />
+      {items.length > 0 && tagList.length > 0 ? (
+        <TagFilterBar
+          tags={tagList}
+          activeTag={activeTag}
+          onTagChange={onTagChange}
+        />
+      ) : null}
 
       <div className="home-page-body">
         {!loadingList && filtered.length > 0 && (
@@ -97,11 +98,7 @@ export default function HomeView({
           <Spin spinning={loadingList && items.length > 0} tip="正在加载…">
             {filtered.length === 0 ? (
               <Empty
-                image={(
-                  <span className="inline-flex items-center justify-center w-20 h-20 rounded bg-ph-orange/10 border border-ph-orange/20 text-ph-orange/80 rise-in">
-                    <InboxOutlined style={{ fontSize: 40 }} />
-                  </span>
-                )}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
                   <Text type="secondary" className="!text-ph-text-tertiary">
                     {activeTag
@@ -109,7 +106,7 @@ export default function HomeView({
                       : '资料库还是空的。点击右上角「同步」按钮抓取最新内容'}
                   </Text>
                 }
-                className="!py-20 rise-in"
+                className="!py-20 rise-in home-empty"
               />
             ) : (
               <Row gutter={CARD_GUTTER}>

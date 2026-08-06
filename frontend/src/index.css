@@ -154,20 +154,15 @@ html, body {
 }
 
 .page-banner-icon {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: var(--r-md);
-  background: rgba(255, 153, 0, 0.18);
-  border: 1px solid var(--c-orange-border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   color: var(--c-orange);
   flex-shrink: 0;
+  line-height: 1;
+  font-size: 1.35rem;
+  display: inline-flex;
+  align-items: center;
 }
 .page-banner-icon.is-lg {
-  width: 3rem;
-  height: 3rem;
+  font-size: 1.6rem;
 }
 
 .surface-card {

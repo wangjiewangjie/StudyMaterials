@@ -4,6 +4,13 @@ import {
 } from '@ant-design/icons';
 import { navBtnClass } from '../constants/layout.js';
 
+function formatElapsedShort(ms) {
+  const sec = Math.floor((ms || 0) / 1000);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 export default function AppHeader({
   query,
   onQueryChange,
@@ -16,6 +23,7 @@ export default function AppHeader({
   onSyncClick,
   onHomeClick,
   syncing,
+  elapsed = 0,
   isMobile,
   onOpenDrawer,
 }) {
@@ -56,7 +64,7 @@ export default function AppHeader({
             size="middle"
             onClick={onOpenDrawer}
             icon={<MenuOutlined style={{ fontSize: 18 }} />}
-            className="app-btn-icon !text-ph-orange hover:!bg-ph-orange/10 shrink-0 !border-0 !bg-transparent"
+            className="!text-ph-orange hover:!bg-ph-orange/10 shrink-0 !border-0 !bg-transparent"
             aria-label="打开菜单"
           />
         ) : (
@@ -98,7 +106,11 @@ export default function AppHeader({
               }`}
             >
               <span className={`w-2 h-2 rounded-full ${syncing ? 'bg-ph-text-muted' : 'bg-ph-orange'}`} />
-              {syncing ? '同步中…' : '同步'}
+              {syncing ? (
+                <span className="tabular-nums">同步中 {formatElapsedShort(elapsed)}</span>
+              ) : (
+                '同步'
+              )}
             </Button>
           </div>
         )}
