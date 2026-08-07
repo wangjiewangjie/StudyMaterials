@@ -1,14 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { syncCrawl, syncTags, syncKeywords } from '../services/api.js';
+import { syncCrawl, syncTags, syncKeywords, fetchCrawlEstimate } from '../services/api.js';
+
+function formatClockMs(ms) {
+  const sec = Math.max(0, Math.floor((ms || 0) / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 // 同步状态 hook：管理进度、日志、历史记录与取消。
-// 后端同步为一次性请求（非流式），故进度采用模拟递进 + 完成时置 100%。
+// 后端同步为一次性请求（非流式），进度按预估耗时推进，完成时置 100%。
 export function useSync(message, onSyncDone) {
   const [syncing, setSyncing] = useState(false);
   const [syncLogs, setSyncLogs] = useState('');
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [etaMs, setEtaMs] = useState(0);
+  const [etaLabel, setEtaLabel] = useState('');
+  const [remainingMs, setRemainingMs] = useState(0);
   const [syncStats, setSyncStats] = useState({ added: 0, total: 0, skipped: 0 });
   const [syncHistory, setSyncHistory] = useState([]);
   const [lastSyncAt, setLastSyncAt] = useState(null);
@@ -16,29 +26,30 @@ export function useSync(message, onSyncDone) {
   const abortRef = useRef(null);
   const timerRef = useRef(null);
   const startRef = useRef(0);
-  const progressRef = useRef(null);
+  const etaMsRef = useRef(0);
   const onDoneRef = useRef(onSyncDone);
   onDoneRef.current = onSyncDone;
 
-  // 计时器：每秒更新已运行时长
+  // 计时器：已运行 + 预计剩余 + 按 ETA 推进进度
   useEffect(() => {
     if (!syncing) return undefined;
     timerRef.current = setInterval(() => {
-      setElapsed(Date.now() - startRef.current);
+      const elapsedNow = Date.now() - startRef.current;
+      setElapsed(elapsedNow);
+      const total = etaMsRef.current;
+      if (total > 0) {
+        setRemainingMs(Math.max(0, total - elapsedNow));
+        setProgress((p) => {
+          if (p >= 90) return p;
+          const byEta = Math.min(90, Math.round((elapsedNow / total) * 90));
+          return Math.max(p, byEta);
+        });
+      } else {
+        setRemainingMs(0);
+        setProgress((p) => (p >= 90 ? p : Math.min(90, p + Math.max(1, Math.round((90 - p) * 0.08)))));
+      }
     }, 1000);
     return () => clearInterval(timerRef.current);
-  }, [syncing]);
-
-  // 模拟进度递进：逼近 90% 后等待真实完成
-  useEffect(() => {
-    if (!syncing) return undefined;
-    progressRef.current = setInterval(() => {
-      setProgress((p) => {
-        if (p >= 90) return p;
-        return Math.min(90, p + Math.max(1, Math.round((90 - p) * 0.08)));
-      });
-    }, 600);
-    return () => clearInterval(progressRef.current);
   }, [syncing]);
 
   // 同步未完成时离开页面提醒
@@ -57,7 +68,10 @@ export function useSync(message, onSyncDone) {
     setSyncing(false);
     setProgress(0);
     setElapsed(0);
-    if (progressRef.current) clearInterval(progressRef.current);
+    setEtaMs(0);
+    setEtaLabel('');
+    setRemainingMs(0);
+    etaMsRef.current = 0;
     if (timerRef.current) clearInterval(timerRef.current);
   }, []);
 
@@ -72,6 +86,10 @@ export function useSync(message, onSyncDone) {
     setSyncing(true);
     setProgress(0);
     setElapsed(0);
+    setEtaMs(0);
+    setEtaLabel('');
+    setRemainingMs(0);
+    etaMsRef.current = 0;
     setSyncStats({ added: 0, total: 0, skipped: 0 });
     startRef.current = Date.now();
 
@@ -84,6 +102,28 @@ export function useSync(message, onSyncDone) {
       ? `开始同步 ${tags.length} 个标签: ${tags.join(', ')}\n`
       : '开始全量抓取列表…\n');
     if (message) message.info({ content: '已开始后台同步，可继续浏览；请勿刷新页面', duration: 3 });
+
+    // 爬取前预估耗时
+    try {
+      const est = await fetchCrawlEstimate(
+        isTagSync
+          ? { mode: 'tags', tags: tags.length, pages }
+          : { mode: 'sync', pageStart: 1, pageEnd: 1 },
+        controller.signal,
+      );
+      if (est && est.estimateMs) {
+        etaMsRef.current = est.estimateMs;
+        setEtaMs(est.estimateMs);
+        setEtaLabel(est.estimateLabel || '');
+        setRemainingMs(est.estimateMs);
+        const range = est.rangeLabel ? `（约 ${est.rangeLabel}）` : '';
+        const expect = est.expectedArticles ? `，约 ${est.expectedArticles} 条` : '';
+        setSyncLogs((p) => `${p}预计耗时约 ${est.estimateLabel}${range}${expect}\n`);
+        setStatus(`预计约 ${est.estimateLabel} · 剩余 ${formatClockMs(est.estimateMs)}`);
+      }
+    } catch (_) {
+      // 预估失败不影响同步
+    }
 
     try {
       const data = isTagSync
@@ -109,6 +149,7 @@ export function useSync(message, onSyncDone) {
       setSyncLogs(logTail + `\n完成：新增 ${data.added || 0} 条，共 ${data.total || 0} 条\n`);
       setSyncStats({ added: data.added || 0, total: data.total || 0, skipped: 0 });
       setProgress(100);
+      setRemainingMs(0);
       setStatus(`同步完成：+${data.added || 0}，共 ${data.total || 0} 条`);
       setLastSyncAt(new Date().toISOString());
       if (message) message.success(`同步完成：+${data.added || 0}，共 ${data.total || 0} 条`);
@@ -253,7 +294,7 @@ export function useSync(message, onSyncDone) {
   }, []);
 
   return {
-    syncing, syncLogs, status, progress, elapsed, syncStats,
+    syncing, syncLogs, status, progress, elapsed, etaMs, etaLabel, remainingMs, syncStats,
     syncHistory, lastSyncAt,
     startSync, cancelSync,
     // 关键词同步

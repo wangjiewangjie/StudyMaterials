@@ -858,6 +858,39 @@ html, body {
   z-index: 80 !important;
 }
 
+/* 详情配图缩略图：小图点击由 antd Image 全屏预览 */
+.detail-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+@media (min-width: 640px) {
+  .detail-thumb-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.625rem;
+  }
+}
+.detail-thumb-wrap.ant-image,
+.detail-thumb-wrap {
+  display: block !important;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+.detail-thumb-wrap .ant-image-img,
+.detail-thumb-wrap img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+.detail-thumb-inline {
+  max-width: min(240px, 55vw);
+}
+.detail-thumb-inline .detail-thumb-wrap {
+  aspect-ratio: 4 / 3;
+}
+
 .back-top {
   position: fixed;
   right: 20px;

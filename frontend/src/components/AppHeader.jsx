@@ -24,6 +24,7 @@ export default function AppHeader({
   onHomeClick,
   syncing,
   elapsed = 0,
+  remainingMs = 0,
   isMobile,
   onOpenDrawer,
 }) {
@@ -107,7 +108,11 @@ export default function AppHeader({
             >
               <span className={`w-2 h-2 rounded-full ${syncing ? 'bg-ph-text-muted' : 'bg-ph-orange'}`} />
               {syncing ? (
-                <span className="tabular-nums">同步中 {formatElapsedShort(elapsed)}</span>
+                <span className="tabular-nums">
+                  {remainingMs > 0
+                    ? `剩余 ${formatElapsedShort(remainingMs)}`
+                    : `同步中 ${formatElapsedShort(elapsed)}`}
+                </span>
               ) : (
                 '同步'
               )}

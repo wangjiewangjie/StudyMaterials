@@ -9,14 +9,17 @@ const net = require('net');
 const os = require('os');
 const axios = require('axios');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
-  loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getBaseUrl } = require('./crawler');
-const { decryptBuffer } = require('./image-decrypt');
+  loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getSites, getBaseUrl,
+  estimateCrawlTime } = require('./crawler');
+const { decryptBuffer, resetDecrypt, ensureDecryptReady } = require('./image-decrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
 const { matchesExclude, filterExcludedArticles } = require('./lib/exclude');
+const { startConsoleCountdown, formatDuration } = require('./lib/crawl-eta');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
 const PORT_FILE = path.join(__dirname, '.server-port');
+const MEDIA_CACHE_DIR = path.join(__dirname, 'output', 'media-cache');
 
 /** 本机局域网 IPv4（排除回环与内部虚拟网卡） */
 function getLocalIPv4() {
@@ -171,6 +174,7 @@ function toVideoItem(a) {
     datePublished: a.datePublished || null,
     content: a.content || '',
     images: Array.isArray(a.images) ? a.images : [],
+    blocks: Array.isArray(a.blocks) ? a.blocks : [],
     favoritedAt: a.favoritedAt || null,
   };
 }
@@ -378,37 +382,127 @@ app.get('/api/tags', (req, res) => {
 // 封面：远程抓取后内存解密再返回，不落盘
 /** 根据文件头判断图片类型 */
 function sniffImage(buf) {
-  if (buf[0] === 0xFF && buf[1] === 0xD8) return { valid: true, contentType: 'image/jpeg' };
-  if (buf[0] === 0x89 && buf[1] === 0x50) return { valid: true, contentType: 'image/png' };
-  if (buf[0] === 0x47 && buf[1] === 0x49) return { valid: true, contentType: 'image/gif' };
-  if (buf.length >= 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return { valid: true, contentType: 'image/webp' };
-  return { valid: false, contentType: 'application/octet-stream' };
+  if (!buf || buf.length < 4) return { valid: false, contentType: 'application/octet-stream', ext: 'bin' };
+  if (buf[0] === 0xFF && buf[1] === 0xD8) return { valid: true, contentType: 'image/jpeg', ext: 'jpg' };
+  if (buf[0] === 0x89 && buf[1] === 0x50) return { valid: true, contentType: 'image/png', ext: 'png' };
+  if (buf[0] === 0x47 && buf[1] === 0x49) return { valid: true, contentType: 'image/gif', ext: 'gif' };
+  if (buf.length >= 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') {
+    return { valid: true, contentType: 'image/webp', ext: 'webp' };
+  }
+  return { valid: false, contentType: 'application/octet-stream', ext: 'bin' };
 }
 
 /** 文章请求 Referer：优先 siteUrl，其次归档 URL origin */
 function refererFor(item) {
   return item.siteUrl || (item.url ? new URL(item.url).origin : getBaseUrl());
 }
+
+/** 解密脚本优先站点列表（当前条目站 + 已启用站） */
+function decryptSiteCandidates(item) {
+  const list = [];
+  if (item && item.siteUrl) list.push(item.siteUrl);
+  for (const s of getSites()) list.push(s);
+  const base = getBaseUrl();
+  if (base) list.push(base);
+  return list;
+}
+
+function mediaCachePath(kind, id, index) {
+  const safeId = String(id || '').replace(/[^\w.-]/g, '_');
+  const name = kind === 'cover'
+    ? `cover-${safeId}`
+    : `img-${safeId}-${Number(index) || 0}`;
+  return path.join(MEDIA_CACHE_DIR, name);
+}
+
+function readMediaCache(kind, id, index) {
+  try {
+    const base = mediaCachePath(kind, id, index);
+    const metaPath = `${base}.json`;
+    if (!fs.existsSync(metaPath)) return null;
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const binPath = meta.file || `${base}.${meta.ext || 'bin'}`;
+    if (!fs.existsSync(binPath)) return null;
+    return {
+      buf: fs.readFileSync(binPath),
+      contentType: meta.contentType || 'application/octet-stream',
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeMediaCache(kind, id, index, buf, contentType) {
+  try {
+    fs.mkdirSync(MEDIA_CACHE_DIR, { recursive: true });
+    const sniff = sniffImage(buf);
+    const ext = sniff.ext || 'bin';
+    const base = mediaCachePath(kind, id, index);
+    const binPath = `${base}.${ext}`;
+    fs.writeFileSync(binPath, buf);
+    fs.writeFileSync(`${base}.json`, JSON.stringify({
+      contentType: contentType || sniff.contentType,
+      ext,
+      file: binPath,
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (e) {
+    console.warn('[media-cache] write failed:', e.message);
+  }
+}
+
+/** 拉取并解密上游图片；优先读本地缓存 */
+async function fetchDecryptedImage(item, imageUrl, cacheKey) {
+  const cached = readMediaCache(cacheKey.kind, cacheKey.id, cacheKey.index);
+  if (cached) return cached;
+
+  const refererSite = refererFor(item);
+  const upstream = await axios.get(imageUrl, {
+    responseType: 'arraybuffer',
+    timeout: 30000,
+    maxRedirects: 5,
+    headers: { 'User-Agent': UA, Referer: refererSite + '/' },
+  });
+  const raw = Buffer.from(upstream.data);
+  let buf = raw;
+  let sniff = sniffImage(buf);
+  if (!sniff.valid) {
+    const sites = decryptSiteCandidates(item);
+    try {
+      buf = await decryptBuffer(raw, sites);
+    } catch (decErr) {
+      await resetDecrypt();
+      try {
+        buf = await decryptBuffer(raw, sites);
+      } catch (e2) {
+        throw new Error(`图片解密失败: ${e2.message}`);
+      }
+    }
+    sniff = sniffImage(buf);
+    if (!sniff.valid) {
+      throw new Error('解密后仍不是有效图片');
+    }
+  }
+
+  writeMediaCache(cacheKey.kind, cacheKey.id, cacheKey.index, buf, sniff.contentType);
+  return { buf, contentType: sniff.contentType };
+}
+
 app.get('/api/cover/:id', async (req, res) => {
   const found = findById(req.params.id);
   const item = found && found.item;
   if (!item || !item.coverUrl) return res.status(404).send('no cover');
   try {
-    const refererSite = refererFor(item);
-    const upstream = await axios.get(item.coverUrl, {
-      responseType: 'arraybuffer',
-      timeout: 30000,
-      headers: { 'User-Agent': UA, Referer: refererSite + '/' },
+    const { buf, contentType } = await fetchDecryptedImage(item, item.coverUrl, {
+      kind: 'cover',
+      id: item.id,
+      index: 0,
     });
-    let buf = Buffer.from(upstream.data);
-    if (!sniffImage(buf).valid) {
-      // 源站封面可能是 AES 加密，解密后返回
-      buf = await decryptBuffer(buf);
-    }
-    res.set('Content-Type', sniffImage(buf).contentType);
+    res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buf);
   } catch (err) {
+    console.error('[cover]', req.params.id, err.message);
     const code = err.response && err.response.status ? err.response.status : 502;
     res.status(code).send('cover error: ' + err.message);
   }
@@ -423,20 +517,16 @@ app.get('/api/image/:id/:index', async (req, res) => {
   const imageUrl = images[idx];
   if (!imageUrl) return res.status(404).send('no image');
   try {
-    const refererSite = refererFor(item);
-    const upstream = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 30000,
-      headers: { 'User-Agent': UA, Referer: refererSite + '/' },
+    const { buf, contentType } = await fetchDecryptedImage(item, imageUrl, {
+      kind: 'image',
+      id: item.id,
+      index: idx,
     });
-    let buf = Buffer.from(upstream.data);
-    if (!sniffImage(buf).valid) {
-      buf = await decryptBuffer(buf);
-    }
-    res.set('Content-Type', sniffImage(buf).contentType);
+    res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buf);
   } catch (err) {
+    console.error('[image]', req.params.id, idx, err.message);
     const code = err.response && err.response.status ? err.response.status : 502;
     res.status(code).send('image error: ' + err.message);
   }
@@ -511,6 +601,10 @@ app.get('/api/refresh/:id', async (req, res) => {
       target.images = detail.images;
       patch.images = detail.images;
     }
+    if (detail.blocks && detail.blocks.length) {
+      target.blocks = detail.blocks;
+      patch.blocks = detail.blocks;
+    }
 
     if (Object.keys(patch).length) {
       if (found.source === 'index') {
@@ -530,6 +624,7 @@ app.get('/api/refresh/:id', async (req, res) => {
       datePublished: target.datePublished || null,
       content: target.content || '',
       images: target.images || [],
+      blocks: target.blocks || [],
     });
   } catch (err) {
     const info = requestErrorInfo(err, target.url);
@@ -604,7 +699,9 @@ app.post('/api/search-online', async (req, res) => {
       searchPages,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 3,
+      concurrency: 2,
+      pushEvery: 10,
+      onBatch: () => { onIndexChanged(); },
       onLog: (m) => logs.push(m),
     });
     // Crawl rewrote index.json; bust the mtime cache so getIndex reloads.
@@ -645,7 +742,9 @@ app.post('/api/sync-tags', async (req, res) => {
           limit: 50,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 3,
+          concurrency: 2,
+          pushEvery: 10,
+          onBatch: () => { onIndexChanged(); },
           onLog: (m) => tagLogs.push(m),
         });
         totalAdded += result.added;
@@ -724,7 +823,9 @@ app.post('/api/sync-keywords', async (req, res) => {
         limit: 50,
         outDir: OUT_DIR,
         jsonPath: JSON_PATH,
-        concurrency: 3,
+        concurrency: 2,
+        pushEvery: 10,
+        onBatch: () => { onIndexChanged(); },
         onLog: (m) => kwLogs.push(m),
       }));
 
@@ -787,6 +888,32 @@ app.post('/api/sync-keywords', async (req, res) => {
   });
 });
 
+// 爬取耗时预估（同步弹窗倒计时用）
+app.get('/api/crawl-estimate', (req, res) => {
+  const mode = String(req.query.mode || 'sync');
+  const concurrency = 2;
+  let eta;
+  if (mode === 'startup') {
+    eta = estimateCrawlTime({ minPerSite: 50, concurrency });
+  } else if (mode === 'tags') {
+    const n = Math.max(1, parseInt(req.query.tags, 10) || 1);
+    eta = estimateCrawlTime({
+      search: 'tag',
+      searchPages: parseInt(req.query.pages, 10) || 1,
+      concurrency,
+    });
+    eta.estimateSec = Math.ceil(eta.estimateSec * n * 0.85);
+    eta.estimateMs = eta.estimateSec * 1000;
+    eta.estimateLabel = formatDuration(eta.estimateSec);
+    eta.modeLabel = `${n} 个标签同步`;
+  } else {
+    const pageStart = parseInt(req.query.pageStart, 10) || 1;
+    const pageEnd = parseInt(req.query.pageEnd, 10) || pageStart;
+    eta = estimateCrawlTime({ pageStart, pageEnd, concurrency });
+  }
+  res.json({ ok: true, ...eta });
+});
+
 // 列表页爬取
 app.post('/api/crawl', async (req, res) => {
   const pageStart = parseInt(req.body && req.body.pageStart, 10) || 1;
@@ -798,7 +925,9 @@ app.post('/api/crawl', async (req, res) => {
       pageEnd,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 3,
+      concurrency: 2,
+      pushEvery: 10,
+      onBatch: () => { onIndexChanged(); },
       onLog: (m) => logs.push(m),
     });
     onIndexChanged();
@@ -831,23 +960,34 @@ app.get('*', (req, res) => {
     console.log(`  索引 ${getIndex().length} 条 · 收藏 ${getFavorites().length} 条`);
     console.log('');
 
-    // 启动后静默后台爬取，打印起止摘要与耗时
+    // 预热图片解密脚本（多站回退 / 本地缓存），避免首张封面才失败
+    ensureDecryptReady(getSites())
+      .then(() => console.log('  图片解密脚本就绪'))
+      .catch((e) => console.warn('  图片解密脚本未就绪:', e.message));
+
+    // 启动后静默后台爬取：先估时，控制台倒计时
     (async () => {
       const t0 = Date.now();
+      const eta = estimateCrawlTime({ minPerSite: 50, concurrency: 2 });
+      console.log(`  预计同步约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条`);
+      const stopCountdown = startConsoleCountdown(eta.estimateSec, '  后台同步中…');
       try {
-        console.log('  后台同步中…');
         await crawl({
           minPerSite: 50,
           replace: true,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 3,
+          concurrency: 2,
+          pushEvery: 10,
+          onBatch: () => { onIndexChanged(); },
           onLog: () => {},
         });
         onIndexChanged();
+        stopCountdown();
         const sec = ((Date.now() - t0) / 1000).toFixed(1);
-        console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s\n`);
+        console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s（预估 ${eta.estimateSec}s）\n`);
       } catch (e) {
+        stopCountdown();
         const sec = ((Date.now() - t0) / 1000).toFixed(1);
         console.warn(`  同步失败（耗时 ${sec}s）:`, e.message);
       }

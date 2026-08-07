@@ -59,6 +59,21 @@ export async function syncCrawl(pageStart = 1, pageEnd = 1, signal) {
   return postJSON('/api/crawl', { pageStart, pageEnd }, signal);
 }
 
+/** 爬取前耗时预估：mode=sync|tags|startup */
+export async function fetchCrawlEstimate({ mode = 'sync', pageStart = 1, pageEnd = 1, tags = 1, pages = 1 } = {}, signal) {
+  const q = new URLSearchParams({ mode: String(mode) });
+  if (mode === 'tags') {
+    q.set('tags', String(tags));
+    q.set('pages', String(pages));
+  } else if (mode !== 'startup') {
+    q.set('pageStart', String(pageStart));
+    q.set('pageEnd', String(pageEnd));
+  }
+  const res = await fetch(`/api/crawl-estimate?${q}`, { signal });
+  if (!res.ok) throw new Error(`预估失败 ${res.status}`);
+  return res.json();
+}
+
 export async function syncTags(tags, pages = 1, signal) {
   return postJSON('/api/sync-tags', { tags, pages }, signal);
 }

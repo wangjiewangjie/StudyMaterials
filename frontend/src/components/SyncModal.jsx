@@ -12,12 +12,15 @@ function formatElapsed(ms) {
   return `${h}:${m}:${s}`;
 }
 
-// 同步进度模态框：总进度 / 统计 / 实时日志 / 耗时。
+// 同步进度模态框：总进度 / 统计 / 实时日志 / 耗时 / 预估倒计时。
 export default function SyncModal({
   open,
   status,
   progress,
   elapsed,
+  etaMs = 0,
+  etaLabel = '',
+  remainingMs = 0,
   syncStats,
   syncLogs,
   onCancel,
@@ -32,8 +35,10 @@ export default function SyncModal({
   }, [syncLogs]);
 
   const elapsedLabel = formatElapsed(elapsed);
+  const remainingLabel = formatElapsed(remainingMs);
   const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
   const isDone = pct >= 100;
+  const overtime = !isDone && etaMs > 0 && remainingMs <= 0 && elapsed > etaMs;
 
   return (
     <Modal
@@ -59,11 +64,22 @@ export default function SyncModal({
               {isDone ? '同步已完成' : '正在同步数据索引'}
             </h2>
             <p className="text-xs text-gray-400 mt-1 mb-0">
-              {isDone ? '本次同步任务已结束，可关闭窗口' : '请勿关闭窗口，后台正在拉取最新节点数据'}
+              {isDone
+                ? '本次同步任务已结束，可关闭窗口'
+                : etaLabel
+                  ? `预估约 ${etaLabel}，请勿关闭窗口`
+                  : '请勿关闭窗口，后台正在拉取最新节点数据'}
             </p>
-            <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-ph-orange font-bold tabular-nums">
-              <ClockCircleOutlined style={{ fontSize: 12 }} />
-              <span>已运行 {elapsedLabel}</span>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ph-orange font-bold tabular-nums">
+              <span className="inline-flex items-center gap-1.5">
+                <ClockCircleOutlined style={{ fontSize: 12 }} />
+                已运行 {elapsedLabel}
+              </span>
+              {!isDone && etaMs > 0 && (
+                <span className="text-ph-orange-light">
+                  {overtime ? '已超出预估' : `预计剩余 ${remainingLabel}`}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -98,7 +114,13 @@ export default function SyncModal({
             <span>
               已处理 {syncStats.added + syncStats.skipped} / {syncStats.total || '—'} 条索引
             </span>
-            <span className="tabular-nums">{isDone ? '已完成' : `运行中 · ${elapsedLabel}`}</span>
+            <span className="tabular-nums">
+              {isDone
+                ? '已完成'
+                : etaMs > 0
+                  ? (overtime ? `超时 · ${elapsedLabel}` : `剩余 ${remainingLabel}`)
+                  : `运行中 · ${elapsedLabel}`}
+            </span>
           </div>
         </div>
 
@@ -152,9 +174,16 @@ export default function SyncModal({
       </div>
 
       <div className="p-5 sm:p-6 border-t border-white/5 bg-[#121212]/50 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm text-ph-orange font-bold tabular-nums">
-          <ClockCircleOutlined style={{ fontSize: 14 }} />
-          <span>耗时 {elapsedLabel}</span>
+        <div className="flex flex-col gap-0.5 text-sm text-ph-orange font-bold tabular-nums">
+          <span className="inline-flex items-center gap-2">
+            <ClockCircleOutlined style={{ fontSize: 14 }} />
+            耗时 {elapsedLabel}
+          </span>
+          {!isDone && etaLabel && (
+            <span className="text-xs text-ph-orange-light font-medium pl-6">
+              {overtime ? '超出预估，仍在进行' : `预计剩余 ${remainingLabel}（共约 ${etaLabel}）`}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button

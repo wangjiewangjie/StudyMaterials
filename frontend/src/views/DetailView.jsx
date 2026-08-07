@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Tag, Row, Col } from 'antd';
+import { Button, Tag, Row, Col, Image } from 'antd';
 import {
   ArrowLeftOutlined, StarFilled, StarOutlined, LinkOutlined,
 } from '@ant-design/icons';
@@ -17,6 +17,65 @@ function resolveVideos(item) {
   return [];
 }
 
+/** 无 blocks 时，用 content + images 拼出兼容结构 */
+function fallbackBlocks(content, images) {
+  const blocks = [];
+  const raw = (content || '').trim();
+  if (raw) {
+    raw.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean).forEach((text) => {
+      blocks.push({ type: 'text', text });
+    });
+  }
+  (images || []).forEach((_, index) => {
+    blocks.push({ type: 'image', index });
+  });
+  return blocks;
+}
+
+function ThumbImage({ itemId, index }) {
+  return (
+    <Image
+      src={`/api/image/${itemId}/${index}`}
+      alt={`配图 ${index + 1}`}
+      loading="lazy"
+      className="!object-cover"
+      rootClassName="detail-thumb"
+      wrapperClassName="!block overflow-hidden rounded border border-white/5 bg-ph-elevated detail-thumb-wrap"
+    />
+  );
+}
+
+function MetaHeader({ item, localCategory, localTags, onTagClick }) {
+  return (
+    <>
+      <h1 className="text-xl sm:text-2xl font-black italic tracking-tighter text-white leading-snug m-0">
+        {item.title || `条目 ${item.id}`}
+      </h1>
+      {(localCategory || localTags.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {localCategory && (
+            <Tag
+              className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-orange/15 !text-ph-orange !border-ph-orange/30"
+              onClick={() => onTagClick && onTagClick(localCategory)}
+            >
+              {localCategory}
+            </Tag>
+          )}
+          {localTags.map((t) => (
+            <Tag
+              key={t}
+              className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-elevated !text-ph-text-secondary !border-white/10 hover:!text-ph-orange hover:!border-ph-orange/40 transition-colors"
+              onClick={() => onTagClick && onTagClick(t)}
+            >
+              #{t}
+            </Tag>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function DetailView({
   item,
   items,
@@ -32,25 +91,34 @@ export default function DetailView({
   const [localCategory, setLocalCategory] = useState(item.category || null);
   const [localContent, setLocalContent] = useState(item.content || '');
   const [localImages, setLocalImages] = useState(item.images || []);
+  const [localBlocks, setLocalBlocks] = useState(() => (
+    Array.isArray(item.blocks) && item.blocks.length
+      ? item.blocks
+      : fallbackBlocks(item.content, item.images)
+  ));
   const [localVideos, setLocalVideos] = useState(() => resolveVideos(item));
-  const [activeVideoIdx, setActiveVideoIdx] = useState(0);
 
   useEffect(() => {
     setLocalTags(item.tags || []);
     setLocalCategory(item.category || null);
     setLocalContent(item.content || '');
     setLocalImages(Array.isArray(item.images) ? item.images : []);
+    setLocalBlocks(
+      Array.isArray(item.blocks) && item.blocks.length
+        ? item.blocks
+        : fallbackBlocks(item.content, item.images)
+    );
     setLocalVideos(resolveVideos(item));
-    setActiveVideoIdx(0);
   }, [item]);
 
-  const activeVideo = localVideos[activeVideoIdx] || null;
-  const hasVideo = !!(activeVideo && activeVideo.url);
   const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
   const sourceName = useMemo(
     () => resolveSiteName(item.siteUrl, siteNameMap),
     [item.siteUrl, siteNameMap]
   );
+
+  const isMulti = localVideos.length > 1;
+  const primaryVideo = localVideos[0] || null;
 
   const contentParagraphs = useMemo(() => {
     const raw = (localContent || '').trim();
@@ -87,13 +155,23 @@ export default function DetailView({
     if (extra && Array.isArray(extra.images) && extra.images.length) {
       setLocalImages(extra.images);
     }
+    if (extra && Array.isArray(extra.blocks) && extra.blocks.length) {
+      setLocalBlocks(extra.blocks);
+    } else if (extra && (extra.content || extra.images)) {
+      setLocalBlocks(fallbackBlocks(
+        extra.content || localContent,
+        extra.images || localImages
+      ));
+    }
     if (extra && Array.isArray(extra.videos) && extra.videos.length) {
       const next = extra.videos.filter((v) => v && v.url);
-      if (next.length) {
-        setLocalVideos(next);
-        setActiveVideoIdx((i) => Math.min(i, next.length - 1));
-      }
+      if (next.length) setLocalVideos(next);
     }
+  };
+
+  // 把 refresh 的 blocks 传回
+  const handleTagsWithBlocks = (tags, category, datePublished, extra) => {
+    handleTags(tags, category, datePublished, extra);
   };
 
   return (
@@ -143,100 +221,130 @@ export default function DetailView({
         </div>
       </div>
 
-      {localVideos.length > 1 && (
-        <div className="flex flex-wrap gap-2">
-          {localVideos.map((v, i) => (
-            <Button
-              key={`${v.url}-${i}`}
-              size="small"
-              onClick={() => setActiveVideoIdx(i)}
-              className={`!font-semibold !border ${
-                i === activeVideoIdx
-                  ? '!bg-ph-orange/15 !text-ph-orange !border-ph-orange/40'
-                  : '!bg-white/5 !text-ph-text-secondary !border-white/10 hover:!text-ph-orange'
-              }`}
-            >
-              {v.title ? `片段 ${i + 1}` : `视频 ${i + 1}`}
-            </Button>
-          ))}
-        </div>
-      )}
-
-      <div className="relative z-0 w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-ph-header">
-        {hasVideo ? (
-          <VideoPlayer
-            item={item}
-            video={activeVideo}
-            onTags={handleTags}
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-ph-text-muted text-sm">
-            该条目暂无可播放地址
-          </div>
-        )}
-      </div>
-
-      <div className="surface-card p-4 sm:p-5 space-y-4">
-        <h1 className="text-xl sm:text-2xl font-black italic tracking-tighter text-white leading-snug m-0">
-          {item.title || `条目 ${item.id}`}
-        </h1>
-
-        {(localCategory || localTags.length > 0) && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {localCategory && (
-              <Tag
-                className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-orange/15 !text-ph-orange !border-ph-orange/30"
-                onClick={() => onTagClick && onTagClick(localCategory)}
-              >
-                {localCategory}
-              </Tag>
-            )}
-            {localTags.map((t) => (
-              <Tag
-                key={t}
-                className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-elevated !text-ph-text-secondary !border-white/10 hover:!text-ph-orange hover:!border-ph-orange/40 transition-colors"
-                onClick={() => onTagClick && onTagClick(t)}
-              >
-                #{t}
-              </Tag>
-            ))}
-          </div>
-        )}
-
-        {contentParagraphs.length > 0 && (
-          <div className="space-y-3 pt-1 border-t border-white/5">
-            {contentParagraphs.map((p, i) => (
-              <p
-                key={i}
-                className="m-0 text-[13px] sm:text-sm leading-relaxed text-ph-text-secondary whitespace-pre-wrap"
-              >
-                {p}
-              </p>
-            ))}
-          </div>
-        )}
-
-        {localImages.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-white/5">
-            {localImages.map((_, i) => (
-              <a
-                key={i}
-                href={`/api/image/${item.id}/${i}`}
-                target="_blank"
-                rel="noreferrer"
-                className="block overflow-hidden rounded border border-white/5 bg-ph-elevated"
-              >
-                <img
-                  src={`/api/image/${item.id}/${i}`}
-                  alt={`配图 ${i + 1}`}
-                  loading="lazy"
-                  className="w-full h-auto object-cover block"
+      <Image.PreviewGroup>
+        {!isMulti ? (
+          <>
+            {/* 单视频：播放器置顶 + 下方文案/缩略图 */}
+            <div className="relative z-0 w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-ph-header">
+              {primaryVideo ? (
+                <VideoPlayer
+                  item={item}
+                  video={primaryVideo}
+                  onTags={handleTagsWithBlocks}
                 />
-              </a>
-            ))}
-          </div>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-ph-text-muted text-sm">
+                  该条目暂无可播放地址
+                </div>
+              )}
+            </div>
+
+            <div className="surface-card p-4 sm:p-5 space-y-4">
+              <MetaHeader
+                item={item}
+                localCategory={localCategory}
+                localTags={localTags}
+                onTagClick={onTagClick}
+              />
+
+              {contentParagraphs.length > 0 && (
+                <div className="space-y-3 pt-1 border-t border-white/5">
+                  {contentParagraphs.map((p, i) => (
+                    <p
+                      key={i}
+                      className="m-0 text-[13px] sm:text-sm leading-relaxed text-ph-text-secondary whitespace-pre-wrap"
+                    >
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {localImages.length > 0 && (
+                <div className="detail-thumb-grid pt-1 border-t border-white/5">
+                  {localImages.map((_, i) => (
+                    <ThumbImage key={i} itemId={item.id} index={i} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* 多视频：按源站顺序交错排版 文案 / 图 / 播放器 */}
+            <div className="surface-card p-4 sm:p-5 space-y-4">
+              <MetaHeader
+                item={item}
+                localCategory={localCategory}
+                localTags={localTags}
+                onTagClick={onTagClick}
+              />
+            </div>
+
+            <div className="space-y-4">
+              {localBlocks.map((block, i) => {
+                if (block.type === 'text') {
+                  return (
+                    <p
+                      key={`t-${i}`}
+                      className="m-0 px-0.5 text-[13px] sm:text-sm leading-relaxed text-ph-text-secondary whitespace-pre-wrap"
+                    >
+                      {block.text}
+                    </p>
+                  );
+                }
+                if (block.type === 'image' && typeof block.index === 'number') {
+                  return (
+                    <div key={`i-${i}`} className="detail-thumb-inline">
+                      <ThumbImage itemId={item.id} index={block.index} />
+                    </div>
+                  );
+                }
+                if (block.type === 'video' && typeof block.index === 'number') {
+                  const v = localVideos[block.index];
+                  if (!v || !v.url) return null;
+                  return (
+                    <div
+                      key={`v-${i}-${block.index}`}
+                      className="relative z-0 w-full overflow-hidden border border-white/5 bg-ph-header shadow-xl"
+                    >
+                      {v.title ? (
+                        <div className="px-3 py-2 text-xs font-bold text-ph-text-secondary border-b border-white/5 bg-ph-elevated/80">
+                          {v.title}
+                        </div>
+                      ) : null}
+                      <VideoPlayer
+                        item={item}
+                        video={v}
+                        onTags={block.index === 0 ? handleTagsWithBlocks : undefined}
+                        defer={block.index > 0}
+                        autoplay={block.index === 0}
+                      />
+                    </div>
+                  );
+                }
+                return null;
+              })}
+
+              {/* blocks 里没有视频锚点时，仍按顺序列出全部视频 */}
+              {!localBlocks.some((b) => b.type === 'video') && localVideos.map((v, idx) => (
+                <div
+                  key={`fallback-v-${idx}`}
+                  className="relative z-0 w-full overflow-hidden border border-white/5 bg-ph-header shadow-xl"
+                >
+                  <VideoPlayer
+                    item={item}
+                    video={v}
+                    onTags={idx === 0 ? handleTagsWithBlocks : undefined}
+                    defer={idx > 0}
+                    autoplay={idx === 0}
+                  />
+                </div>
+              ))}
+            </div>
+          </>
         )}
-      </div>
+      </Image.PreviewGroup>
 
       {similar.length > 0 && (
         <section className="space-y-4 overflow-x-hidden">

@@ -12,6 +12,11 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 const { matchesExclude, filterExcluded } = require('./lib/exclude');
+const {
+  browserHeaders, waitHostSlot, noteHostResult, shuffleInPlace, sleep: antiSleep,
+  DEFAULTS: ANTI_BAN_DEFAULTS,
+} = require('./lib/anti-ban');
+const { estimateCrawl, startConsoleCountdown, formatDuration } = require('./lib/crawl-eta');
 
 // 站点项：{ url, name, todayPath, enabled, archiveSuffix? }；archiveSuffix 默认 "/"，部分站用 ".html"
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
@@ -68,28 +73,29 @@ function getSiteConfigs() { return SITE_CONFIGS; }
 function getSites() { return SITES; }
 function getBaseUrl() { return BASE_URL; }
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-// Keep-Alive：复用同主机 TCP，减少爬取握手开销
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
+// Keep-Alive：限制单主机并发套接字，降低被识别为爆破的风险
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4 });
 
 const client = axios.create({
-  timeout: 30000,
+  timeout: 35000,
   maxRedirects: 5,
   httpAgent,
   httpsAgent,
   headers: {
     'User-Agent': UA,
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
   },
+  validateStatus: (s) => s >= 200 && s < 400,
 });
 
 // ---------- helpers ----------
 
 function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return antiSleep(ms);
 }
 
 /** 从归档 URL 提取文章 ID（兼容 /archives/123/ 与 /archives/123.html） */
@@ -139,22 +145,46 @@ function searchUrl(site, keyword, pageNum) {
   return pageNum <= 1 ? `${site}/search/${enc}/` : `${site}/search/${enc}/page/${pageNum}/`;
 }
 
-/** 请求 Referer 与目标站同源 */
-function headersFor(site) {
-  return { Referer: site + '/', Origin: site };
+/** 请求头：浏览器指纹 + 同源 Referer（每次随机 UA） */
+function headersFor(site, forApi = false) {
+  return browserHeaders(site, { forApi });
 }
 
-async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders = {}) {
+/**
+ * 带主机限速 / 冷却 / 指数退避的 GET。
+ * opts: { minIntervalMs, jitterMs, maxConcurrentPerHost, forApi }
+ */
+async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders = {}, opts = {}) {
   let lastErr;
+  const siteOrigin = (() => {
+    try { return new URL(url).origin; } catch (_) { return ''; }
+  })();
+
   for (let i = 0; i < retries; i++) {
+    const release = await waitHostSlot(url, opts);
     try {
-      return await httpClient.get(url, { headers: extraHeaders });
+      const headers = {
+        ...headersFor(siteOrigin || (extraHeaders.Origin || ''), !!opts.forApi),
+        ...extraHeaders,
+      };
+      const res = await httpClient.get(url, { headers });
+      noteHostResult(url, res.status);
+      release();
+      return res;
     } catch (err) {
+      release();
       lastErr = err;
       const code = err.response && err.response.status;
-      // 4xx (except 429) are not retryable.
-      if (code && code >= 400 && code < 500 && code !== 429) throw err;
-      await sleep(800 * Math.pow(2, i) + Math.floor(Math.random() * 300));
+      noteHostResult(url, code || err);
+
+      // 4xx（除 429/403）一般不重试
+      if (code && code >= 400 && code < 500 && code !== 429 && code !== 403) throw err;
+
+      const coolBoost = (code === 429 || code === 403)
+        ? 2500 * (i + 1)
+        : 0;
+      const backoff = 1000 * Math.pow(2, i) + Math.floor(Math.random() * 600) + coolBoost;
+      await sleep(backoff);
     }
   }
   throw lastErr;
@@ -295,52 +325,100 @@ function resolveImgUrl($img) {
   return raw;
 }
 
-/** 提取详情正文文字与配图（排除广告按钮、站内导航、占位图） */
+/**
+ * 截取至「最后一个播放器」：删除末个 .dplayer 之后的全部内容（播放器之间的正文保留）。
+ * 无播放器时保留全文（仍会走广告/噪声过滤）。
+ */
+function sliceThroughLastPlayer($root) {
+  const $player = $root.find('.dplayer').last();
+  if (!$player.length) return $root;
+
+  let $cur = $player;
+  while ($cur.length && !$cur.is($root)) {
+    $cur.nextAll().remove();
+    $cur = $cur.parent();
+  }
+  return $root;
+}
+
+/** 提取详情正文：有序 blocks（text / image / video）+ 兼容字段 content / images */
 function extractDetailBody($) {
   const $root = $(DETAIL_BODY_SELECTORS).first();
-  if (!$root.length) return { content: '', images: [] };
+  if (!$root.length) return { content: '', images: [], blocks: [] };
 
-  const images = [];
-  const seenImg = new Set();
-  $root.find('img').each((_, img) => {
-    const raw = resolveImgUrl($(img));
-    if (!raw || seenImg.has(raw)) return;
-    seenImg.add(raw);
-    images.push(raw);
-  });
-  // 详情配图过多时截断（避免相关推荐/瀑布流把索引撑爆）
-  if (images.length > 24) images.length = 24;
+  const $scope = $root.clone();
+  sliceThroughLastPlayer($scope);
 
-  const $clone = $root.clone();
-  $clone.find([
-    '.article-ads-btn', '.dplayer', 'script', 'style',
+  // 去掉噪声，但保留 .dplayer 作为视频锚点
+  $scope.find([
+    '.article-ads-btn', 'script', 'style',
     '.content-copyright', '.tags', 'table', 'blockquote',
     '.content-tabs', '.article-bottom-apps', '.post-near',
   ].join(',')).remove();
 
-  const parts = [];
-  let skipFaq = false;
-  $clone.find('p, h2, h3').each((_, el) => {
-    const t = $(el).text().replace(/\s+/g, ' ').trim();
+  const blocks = [];
+  const images = [];
+  const seenImg = new Set();
+  let videoIndex = 0;
+
+  $scope.find('p, h2, h3, img, .dplayer').each((_, el) => {
+    const $el = $(el);
+
+    if ($el.is('.dplayer')) {
+      blocks.push({ type: 'video', index: videoIndex });
+      videoIndex += 1;
+      return;
+    }
+
+    // 跳过播放器内部节点
+    if ($el.closest('.dplayer').length) return;
+
+    if ($el.is('img')) {
+      const raw = resolveImgUrl($el);
+      if (!raw || seenImg.has(raw)) return;
+      seenImg.add(raw);
+      const index = images.length;
+      images.push(raw);
+      blocks.push({ type: 'image', index });
+      return;
+    }
+
+    // 嵌套在另一段标题/段落内则跳过，避免重复
+    if ($el.parents('p, h2, h3').length) return;
+
+    const $clone = $el.clone();
+    $clone.find('img, .dplayer').remove();
+    const t = $clone.text().replace(/\s+/g, ' ').trim();
     if (!t || t.length < 2) return;
-    if (/常见疑问解答|FAQ/i.test(t)) { skipFaq = true; return; }
-    if (skipFaq && /^(Q[：:]|A[：:]|问[：:]|答[：:])/i.test(t)) return;
-    if (skipFaq && !/^(Q[：:]|A[：:]|问[：:]|答[：:])/i.test(t) && t.length > 40) skipFaq = false;
-    if (skipFaq) return;
     if (DETAIL_TEXT_NOISE_RE.test(t)) return;
-    if (/可能你会感兴趣|⬇️/.test(t)) return;
-    parts.push(t);
+    if (/可能你会感兴趣|⬇️|常见疑问解答|FAQ/i.test(t)) return;
+    if (/^(Q[：:]|A[：:]|问[：:]|答[：:])/i.test(t)) return;
+    blocks.push({ type: 'text', text: t });
   });
 
-  return { content: parts.join('\n\n'), images };
+  if (images.length > 24) {
+    images.length = 24;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === 'image' && blocks[i].index >= 24) blocks.splice(i, 1);
+    }
+  }
+
+  const content = blocks
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n\n');
+
+  return { content, images, blocks };
 }
+
+
 
 function parseDetailPage(html) {
   const $ = cheerio.load(html);
   const result = {
     title: null, video: null, videos: [], tags: [], category: null,
     coverUrl: null, datePublished: null, dateModified: null,
-    content: '', images: [],
+    content: '', images: [], blocks: [],
   };
 
   // Title — try multiple selectors used by different themes
@@ -422,6 +500,7 @@ function parseDetailPage(html) {
   const body = extractDetailBody($);
   result.content = body.content;
   result.images = body.images;
+  result.blocks = body.blocks;
 
   // 生成时过滤站点名称/品牌相关标签
   result.tags = filterSiteBrandTags(Array.from(tagSet), SITE_CONFIGS);
@@ -450,7 +529,7 @@ function extractPlayerUrl(resp) {
 /** 将 player 接口解析为真实 m3u8；get_play_url 需先取 ticket，失败时退避重试一次 */
 async function resolvePlayerUrl(siteUrl, playerPath, log) {
   const fullUrl = playerPath.startsWith('http') ? playerPath : siteUrl + playerPath;
-  const headers = headersFor(siteUrl);
+  const apiOpts = { forApi: true, minIntervalMs: 900, jitterMs: 500 };
   const needsTicket = fullUrl.includes('/get_play_url');
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -458,7 +537,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
       let resp;
       if (needsTicket) {
         const ticketUrl = fullUrl.replace('/get_play_url', '/ticket');
-        const tRes = await getWithRetry(ticketUrl, client, 2, headers);
+        const tRes = await getWithRetry(ticketUrl, client, 2, {}, apiOpts);
         const tData = typeof tRes.data === 'string' ? JSON.parse(tRes.data) : tRes.data;
         const ticket = tData && tData.data && tData.data.ticket;
         if (!ticket) {
@@ -469,12 +548,24 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
         const body = new URLSearchParams();
         body.append('ticket', ticket);
         body.append('env', JSON.stringify({ source: 'web', ua: UA }));
-        const pRes = await client.post(fullUrl, body.toString(), {
-          headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
-        });
-        resp = typeof pRes.data === 'string' ? JSON.parse(pRes.data) : pRes.data;
+        const release = await waitHostSlot(fullUrl, apiOpts);
+        try {
+          const pRes = await client.post(fullUrl, body.toString(), {
+            headers: {
+              ...headersFor(siteUrl, true),
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+          });
+          noteHostResult(fullUrl, pRes.status);
+          resp = typeof pRes.data === 'string' ? JSON.parse(pRes.data) : pRes.data;
+        } catch (e) {
+          noteHostResult(fullUrl, e);
+          throw e;
+        } finally {
+          release();
+        }
       } else {
-        const res = await getWithRetry(fullUrl, client, 2, headers);
+        const res = await getWithRetry(fullUrl, client, 2, {}, apiOpts);
         resp = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
       }
       const url = extractPlayerUrl(resp);
@@ -493,7 +584,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
     } catch (err) {
       const code = err.code || (err.response && err.response.status) || '';
       log(`  [player] resolve error (${code} ${err.message}). ${fullUrl}`);
-      if (attempt === 0) { await sleep(800); continue; }
+      if (attempt === 0) { await sleep(1500 + Math.floor(Math.random() * 800)); continue; }
       return null;
     }
   }
@@ -750,7 +841,9 @@ function filterArticlesByModifiedDate(articles, log) {
 
 // ---------- crawl 主流程 ----------
 // 选项：pageStart/pageEnd、search、searchPages、searchPageStart、todayOnly、
-// minPerSite、replace、limit、outDir、concurrency、jsonPath、onLog
+// minPerSite、replace、limit、outDir、concurrency、jsonPath、onLog、
+// pushEvery（详情完成后每 N 条写入索引，默认 10）、onBatch（每批写入后回调）、
+// minIntervalMs、jitterMs（防封限速，同主机最小间隔）
 async function crawl(opts = {}) {
   const pageStart = opts.pageStart || 1;
   const pageEnd = opts.pageEnd || opts.pageStart || 1;
@@ -763,7 +856,13 @@ async function crawl(opts = {}) {
   const replace = opts.replace != null ? !!opts.replace : (todayOnly || minPerSite > 0);
   const limit = opts.limit || 0;
   const outDir = path.resolve(opts.outDir || './output');
-  const concurrency = opts.concurrency || 6;
+  // 默认并发降低，配合同主机串行，降低封 IP 风险
+  const concurrency = Math.max(1, Math.min(opts.concurrency || 3, 6));
+  const pushEvery = Math.max(1, parseInt(opts.pushEvery, 10) || 10);
+  const onBatch = typeof opts.onBatch === 'function' ? opts.onBatch : null;
+  const minIntervalMs = opts.minIntervalMs ?? ANTI_BAN_DEFAULTS.minIntervalMs;
+  const jitterMs = opts.jitterMs ?? ANTI_BAN_DEFAULTS.jitterMs;
+  const rateOpts = { minIntervalMs, jitterMs, maxConcurrentPerHost: 1 };
   const jsonPath = path.resolve(opts.jsonPath || path.join(outDir, 'index.json'));
   const log = typeof opts.onLog === 'function' ? opts.onLog : (m) => console.log(m);
 
@@ -779,7 +878,21 @@ async function crawl(opts = {}) {
       : todayOnly
         ? { type: 'list', label: 'today only (per-site fallback)' }
         : { type: 'list', label: `pages ${pageStart}..${pageEnd}` };
-  log(`=== crawler start | ${mode.label} | ${SITES.length} sites ===`);
+  log(`=== crawler start | ${mode.label} | ${SITES.length} sites | 防封 concurrency=${concurrency} interval≈${minIntervalMs}ms ===`);
+
+  const eta = estimateCrawl({
+    siteCount: SITES.length,
+    concurrency,
+    minIntervalMs,
+    jitterMs,
+    minPerSite,
+    pageStart,
+    pageEnd,
+    search: searchKeyword,
+    searchPages,
+    todayOnly,
+  });
+  log(`预计耗时约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条 · ${eta.modeLabel}`);
 
   const newArticles = [];
   const collectedIds = new Set();
@@ -807,7 +920,7 @@ async function crawl(opts = {}) {
       const pageNum = searchKeyword ? (searchPageStart + i) : (pageStart + i);
       const arts = await fetchListPageFromAllSites(pageNum, log, mode);
       for (const a of arts) addUnique(a);
-      if (i < totalPages - 1) await sleep(150);
+      if (i < totalPages - 1) await sleep(400 + Math.floor(Math.random() * 500));
     }
   }
 
@@ -829,10 +942,54 @@ async function crawl(opts = {}) {
   }
 
   // 2. Fetch detail pages -> extract video URLs + tags + category + real cover + body
-  log('--- Fetching detail pages ---');
+  //    每完成 pushEvery 条即 merge 写入索引，避免全部结束后才一次性可见
+  log(`--- Fetching detail pages (push every ${pushEvery}) ---`);
+  shuffleInPlace(newArticles);
+
+  const pendingPush = [];
+  let flushedCount = 0;
+  let incrementalAdded = 0;
+  let flushChain = Promise.resolve();
+
+  const flushBatch = (batch) => {
+    if (!batch.length) return flushChain;
+    flushChain = flushChain.then(async () => {
+      const snapshot = batch.map((a) => {
+        const copy = { ...a };
+        delete copy._excluded;
+        delete copy._listSource;
+        return copy;
+      });
+      const existing = loadIndex(jsonPath);
+      const { merged, added } = mergeIntoIndex(existing, snapshot);
+      saveIndex(jsonPath, merged);
+      incrementalAdded += added;
+      flushedCount += snapshot.length;
+      log(`  [push] 写入 ${snapshot.length} 条（累计 ${flushedCount}），索引共 ${merged.length} 条（+${added}）`);
+      if (onBatch) {
+        try {
+          await onBatch({
+            batch: snapshot.length,
+            flushed: flushedCount,
+            added,
+            total: merged.length,
+          });
+        } catch (_) { /* 回调失败不影响爬取 */ }
+      }
+    });
+    return flushChain;
+  };
+
+  const queuePush = (article) => {
+    pendingPush.push(article);
+    if (pendingPush.length < pushEvery) return flushChain;
+    const batch = pendingPush.splice(0, pushEvery);
+    return flushBatch(batch);
+  };
+
   await mapWithConcurrency(newArticles, concurrency, async (a) => {
     try {
-      const res = await getWithRetry(a.url, client, 3, headersFor(a.siteUrl));
+      const res = await getWithRetry(a.url, client, 3, {}, rateOpts);
       const detail = parseDetailPage(res.data);
       if (detail.title && !a.title) a.title = detail.title;
       if (detail.tags && detail.tags.length) a.tags = detail.tags;
@@ -842,6 +999,7 @@ async function crawl(opts = {}) {
       if (detail.dateModified) a.dateModified = detail.dateModified;
       if (detail.content) a.content = detail.content;
       if (detail.images && detail.images.length) a.images = detail.images;
+      if (detail.blocks && detail.blocks.length) a.blocks = detail.blocks;
 
       // 解析全部播放器；needsResolve 的逐个换真实 m3u8
       const rawVideos = (detail.videos && detail.videos.length)
@@ -851,6 +1009,7 @@ async function crawl(opts = {}) {
       for (const v of rawVideos) {
         const ok = await resolveVideoEntry(a.siteUrl, { ...v }, log);
         if (ok) resolvedVideos.push(ok);
+        if (rawVideos.length > 1) await sleep(200 + Math.floor(Math.random() * 300));
       }
       a.videos = resolvedVideos;
       a.video = resolvedVideos[0] || null;
@@ -859,8 +1018,21 @@ async function crawl(opts = {}) {
     } catch (err) {
       log(`  [detail] ${a.id} failed: ${err.message}`);
     }
-    await sleep(80);
+
+    // 详情后按排除规则决定是否入库；命中则跳过推送
+    if (matchesExclude(a)) {
+      a._excluded = true;
+      return;
+    }
+    await queuePush(a);
   });
+
+  // 冲刷不足一整批的剩余条目
+  if (pendingPush.length) {
+    await flushBatch(pendingPush.splice(0, pendingPush.length));
+  } else {
+    await flushChain;
+  }
 
   // Post-filter by tags (only available after detail parse).
   filterExcluded(newArticles, 'tag', log);
@@ -879,16 +1051,25 @@ async function crawl(opts = {}) {
 
   if (replace) {
     saveIndex(jsonPath, newArticles);
+    if (onBatch) {
+      try { await onBatch({ batch: newArticles.length, flushed: newArticles.length, added: newArticles.length, total: newArticles.length, final: true }); }
+      catch (_) {}
+    }
     const withVideo = newArticles.filter((a) => a.video && a.video.url).length;
-    log(`Done (replace). Total ${newArticles.length} articles | ${withVideo} with video URL`);
+    log(`Done (replace). Total ${newArticles.length} articles | ${withVideo} with video URL | 分批已推 ${flushedCount}`);
     return { added: newArticles.length, total: newArticles.length, updated: 0, crawled: newArticles.length };
   }
 
+  // merge 模式：分批已写入；再全量 merge 一次确保最终一致
   const existing = loadIndex(jsonPath);
   const { merged, added, updated } = mergeIntoIndex(existing, newArticles);
   saveIndex(jsonPath, merged);
+  if (onBatch) {
+    try { await onBatch({ batch: 0, flushed: flushedCount, added, total: merged.length, final: true }); }
+    catch (_) {}
+  }
   const withVideo = merged.filter((a) => a.video && a.video.url).length;
-  log(`Done (merge). +${added} new, ~${updated} updated | total ${merged.length} | ${withVideo} with video URL`);
+  log(`Done (merge). +${added} new, ~${updated} updated | total ${merged.length} | ${withVideo} with video URL | 分批已推 ${flushedCount}（增量 +${incrementalAdded}）`);
   return { added, total: merged.length, updated, crawled: newArticles.length };
 }
 
@@ -915,19 +1096,39 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const [pageStart, pageEnd] = parsePagesArg(args.pages);
   const searchPages = parseInt(args['search-pages'], 10) || 1;
+  const concurrency = parseInt(args.concurrency, 10) || 3;
+  const todayOnly = !!args['today-only'];
 
-  await crawl({
+  reloadSites();
+  const eta = estimateCrawl({
+    siteCount: SITES.length,
+    concurrency,
     pageStart,
     pageEnd,
     search: args.search || null,
     searchPages,
-    todayOnly: !!args['today-only'],
-    replace: !!args.replace || !!args['today-only'],
-    limit: parseInt(args.limit, 10) || 0,
-    outDir: args.out || './output',
-    concurrency: parseInt(args.concurrency, 10) || 6,
-    jsonPath: args['save-json'] || './output/index.json',
+    todayOnly,
   });
+  console.log(`预计爬取约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条`);
+  const stopCountdown = startConsoleCountdown(eta.estimateSec, '爬取进行中…');
+  const t0 = Date.now();
+  try {
+    await crawl({
+      pageStart,
+      pageEnd,
+      search: args.search || null,
+      searchPages,
+      todayOnly,
+      replace: !!args.replace || todayOnly,
+      limit: parseInt(args.limit, 10) || 0,
+      outDir: args.out || './output',
+      concurrency,
+      jsonPath: args['save-json'] || './output/index.json',
+    });
+  } finally {
+    stopCountdown();
+    console.log(`实际耗时 ${formatDuration((Date.now() - t0) / 1000)}`);
+  }
 }
 
 if (require.main === module) {
@@ -939,7 +1140,25 @@ if (require.main === module) {
 
 module.exports = {
   crawl, parseDetailPage, resolvePlayerUrl, loadIndex, mergeIntoIndex,
+  estimateCrawlTime,
   SITES, UA,
   loadSiteConfigs, saveSiteConfigs, reloadSites,
   getSiteConfigs, getSites, getBaseUrl,
 };
+
+/** 对外预估：自动带上当前启用站点数 */
+function estimateCrawlTime(opts = {}) {
+  reloadSites();
+  return estimateCrawl({
+    siteCount: SITES.length,
+    concurrency: opts.concurrency || 2,
+    minIntervalMs: opts.minIntervalMs,
+    jitterMs: opts.jitterMs,
+    minPerSite: opts.minPerSite || 0,
+    pageStart: opts.pageStart || 1,
+    pageEnd: opts.pageEnd || opts.pageStart || 1,
+    search: opts.search || null,
+    searchPages: opts.searchPages || 1,
+    todayOnly: !!opts.todayOnly,
+  });
+}

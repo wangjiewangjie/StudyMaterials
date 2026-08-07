@@ -30,8 +30,9 @@ export function useAppData(message) {
     }
   }, []);
 
-  const loadVideos = useCallback(async (q) => {
-    setLoadingList(true);
+  const loadVideos = useCallback(async (q, opts = {}) => {
+    const silent = !!opts.silent;
+    if (!silent) setLoadingList(true);
     setLastQuery(q || '');
     try {
       const data = await fetchVideos(q);
@@ -41,7 +42,7 @@ export function useAppData(message) {
       if (e && e.name === 'AbortError') return;
       if (message) message.error('加载失败：' + e.message);
     } finally {
-      setLoadingList(false);
+      if (!silent) setLoadingList(false);
     }
   }, [message, loadTags]);
 

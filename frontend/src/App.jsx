@@ -66,11 +66,20 @@ export default function App() {
   }, [loadVideos, query]);
 
   const {
-    syncing, syncLogs, status, progress, elapsed, syncStats,
+    syncing, syncLogs, status, progress, elapsed, etaMs, etaLabel, remainingMs, syncStats,
     syncHistory, lastSyncAt, startSync, cancelSync,
     keywordSyncing, keywordResults,
     startKeywordSync, cancelKeywordSync,
   } = useSync(message, handleSyncDone);
+
+  // 同步中每批写入索引后，静默刷新列表（无需等全部完成）
+  useEffect(() => {
+    if (!syncing && !keywordSyncing) return undefined;
+    const tick = () => { loadVideos(query.trim(), { silent: true }); };
+    tick();
+    const t = setInterval(tick, 2500);
+    return () => clearInterval(t);
+  }, [syncing, keywordSyncing, loadVideos, query]);
 
   const saveScroll = useCallback((forView) => {
     if (forView && forView !== VIEW.DETAIL) {
@@ -267,6 +276,7 @@ export default function App() {
         onHomeClick={handleHomeClick}
         syncing={syncing}
         elapsed={elapsed}
+        remainingMs={remainingMs}
         isMobile={isMobile}
         onOpenDrawer={() => setDrawerOpen(true)}
       />
@@ -322,6 +332,7 @@ export default function App() {
           lastSyncAt={lastSyncAt}
           syncing={syncing}
           elapsed={elapsed}
+          remainingMs={remainingMs}
           onTriggerSync={handleStartSync}
           // 关键词同步
           keywordSyncing={keywordSyncing}
@@ -336,6 +347,9 @@ export default function App() {
         status={status}
         progress={progress}
         elapsed={elapsed}
+        etaMs={etaMs}
+        etaLabel={etaLabel}
+        remainingMs={remainingMs}
         syncStats={syncStats}
         syncLogs={syncLogs}
         onCancel={handleSyncCancel}
@@ -405,7 +419,11 @@ export default function App() {
                 : '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]'
             }`}
           >
-            {syncing ? `同步中 ${Math.floor(elapsed / 1000 / 60)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, '0')}` : '立即同步'}
+            {syncing
+              ? (remainingMs > 0
+                ? `预计剩余 ${Math.floor(remainingMs / 1000 / 60)}:${String(Math.floor(remainingMs / 1000) % 60).padStart(2, '0')}`
+                : `同步中 ${Math.floor(elapsed / 1000 / 60)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, '0')}`)
+              : '立即同步'}
           </Button>
         </div>
       </Drawer>

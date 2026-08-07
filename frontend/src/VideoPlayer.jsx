@@ -256,13 +256,13 @@ function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
   return art;
 }
 
-export default function VideoPlayer({ item, video: videoProp, onTags }) {
+export default function VideoPlayer({ item, video: videoProp, onTags, defer = false, autoplay = true }) {
   const containerRef = useRef(null);
   const artRef = useRef(null);
   const onTagsRef = useRef(onTags);
   const loadGenRef = useRef(0);
 
-  const [phase, setPhase] = useState('loading');
+  const [phase, setPhase] = useState(defer ? 'idle' : 'loading');
   const [errorMsg, setErrorMsg] = useState('');
   const [loadingTip, setLoadingTip] = useState('正在准备播放…');
 
@@ -314,6 +314,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags }) {
             content: data.content,
             images: data.images,
             videos: data.videos,
+            blocks: data.blocks,
           });
         }
         const refreshedList = Array.isArray(data.videos) && data.videos.length
@@ -356,7 +357,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags }) {
         onReady: () => {
           if (gen !== loadGenRef.current) return;
           setPhase('ready');
-          // 自动播放
+          if (!autoplay) return;
           try {
             art.play().catch((e) => logPlayer('autoplay blocked', e && e.message));
           } catch (e) {
@@ -376,35 +377,54 @@ export default function VideoPlayer({ item, video: videoProp, onTags }) {
       setErrorMsg('播放器初始化失败');
       setPhase('error');
     }
-  }, [item.id, activeVideo]);
+  }, [item.id, activeVideo, autoplay]);
 
   useEffect(() => {
+    if (defer) return undefined;
     loadSource();
-    return () => {
-      loadGenRef.current++;
-      if (artRef.current) {
-        try {
-          artRef.current.destroy(false);
-        } catch (e) {
-          logPlayer('cleanup destroy failed', e);
-        }
-        artRef.current = null;
+    return undefined;
+  }, [loadSource, defer]);
+
+  useEffect(() => () => {
+    loadGenRef.current++;
+    if (artRef.current) {
+      try {
+        artRef.current.destroy(false);
+      } catch (e) {
+        logPlayer('cleanup destroy failed', e);
       }
-    };
-  }, [loadSource]);
+      artRef.current = null;
+    }
+  }, []);
 
   const retry = useCallback(() => { loadSource(); }, [loadSource]);
+  const startDeferred = useCallback(() => {
+    if (phase !== 'idle') return;
+    loadSource();
+  }, [phase, loadSource]);
 
   return (
     <div className="relative bg-black w-full">
-      {/* Artplayer 容器 */}
       <div
         ref={containerRef}
         className="artplayer-app w-full"
         style={{ aspectRatio: '16/9', maxHeight: '78vh' }}
       />
 
-      {/* 海报作为加载背景 */}
+      {phase === 'idle' && (
+        <button
+          type="button"
+          onClick={startDeferred}
+          className="v-overlay absolute inset-0 z-[8] flex flex-col items-center justify-center gap-3 border-0 cursor-pointer bg-black/55 bg-center bg-cover"
+          style={posterUrl ? { backgroundImage: `linear-gradient(rgba(0,0,0,.45),rgba(0,0,0,.55)), url(${posterUrl})` } : undefined}
+        >
+          <span className="w-14 h-14 rounded-full bg-ph-orange text-black flex items-center justify-center text-2xl font-black shadow-lg">
+            ▶
+          </span>
+          <span className="text-sm font-bold text-white">点击播放</span>
+        </button>
+      )}
+
       {phase === 'loading' && posterUrl && (
         <div
           className="v-overlay absolute inset-0 z-[6] bg-black/60 bg-center bg-cover"
