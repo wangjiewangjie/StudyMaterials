@@ -13,6 +13,7 @@ const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 const { matchesExclude, filterExcluded } = require('./lib/exclude');
 const { estimateCrawl, startConsoleCountdown, formatDuration } = require('./lib/crawl-eta');
+const { isPromoDetailText } = require('./lib/detail-noise');
 
 // 站点项：{ url, name, todayPath, enabled, archiveSuffix? }；archiveSuffix 默认 "/"，部分站用 ".html"
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
@@ -232,9 +233,6 @@ function parseListPage(html, siteUrl) {
 const JSON_LD_PUB_RE = /"datePublished"\s*:\s*"([^"]+)"/;
 const JSON_LD_MOD_RE = /"dateModified"\s*:\s*"([^"]+)"/;
 
-/** 详情页正文广告 / 导航噪声（过滤掉） */
-const DETAIL_TEXT_NOISE_RE = /91吃瓜最新地址|91吃瓜永久|91vip\d*|91cg\d|建议使用\s*Chrome|请截图保存|下载\s*91|官方APP|关键词：|^⬇️|91吃瓜推荐|年度最强影院|点击加入|著作权归|转载请注明/i;
-
 function parseVideoFromDplayer($div) {
   const cfg = $div.attr('data-config');
   if (!cfg) return null;
@@ -361,9 +359,7 @@ function extractDetailBody($) {
     $clone.find('img, .dplayer').remove();
     const t = $clone.text().replace(/\s+/g, ' ').trim();
     if (!t || t.length < 2) return;
-    if (DETAIL_TEXT_NOISE_RE.test(t)) return;
-    if (/可能你会感兴趣|⬇️|常见疑问解答|FAQ/i.test(t)) return;
-    if (/^(Q[：:]|A[：:]|问[：:]|答[：:])/i.test(t)) return;
+    if (isPromoDetailText(t)) return;
     blocks.push({ type: 'text', text: t });
   });
 

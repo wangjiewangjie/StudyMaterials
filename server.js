@@ -16,6 +16,7 @@ const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
 const { matchesExclude, filterExcludedArticles } = require('./lib/exclude');
 const { startConsoleCountdown, formatDuration } = require('./lib/crawl-eta');
+const { sanitizeDetailBlocks, sanitizeDetailContent } = require('./lib/detail-noise');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
 const PORT_FILE = path.join(__dirname, '.server-port');
@@ -161,6 +162,11 @@ function toVideoItem(a) {
   const videos = Array.isArray(a.videos) && a.videos.length
     ? a.videos
     : (a.video ? [a.video] : []);
+  const blocks = sanitizeDetailBlocks(a.blocks);
+  let content = sanitizeDetailContent(a.content);
+  if (!content && blocks.length) {
+    content = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
+  }
   return {
     id: a.id,
     title: a.title || '',
@@ -172,9 +178,9 @@ function toVideoItem(a) {
     tags: a.tags || [],
     category: a.category || null,
     datePublished: a.datePublished || null,
-    content: a.content || '',
+    content,
     images: Array.isArray(a.images) ? a.images : [],
-    blocks: Array.isArray(a.blocks) ? a.blocks : [],
+    blocks,
     favoritedAt: a.favoritedAt || null,
   };
 }
