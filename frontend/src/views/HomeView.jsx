@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Spin, Empty, Typography, Row, Col } from 'antd';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { Spin, Empty, Typography, Row, Col, Button } from 'antd';
 import VideoCard from '../components/VideoCard.jsx';
 import TagFilterBar from '../components/TagFilterBar.jsx';
 import PageShell from '../components/PageShell.jsx';
@@ -35,7 +35,7 @@ function SkeletonGrid({ count = 12 }) {
   );
 }
 
-// 首页：标签筛选 + 视频栅格
+// 首页：标签筛选 + 视频栅格（滚动/点击继续加载）
 export default function HomeView({
   items,
   favIds,
@@ -48,6 +48,8 @@ export default function HomeView({
   onToggleFavorite,
 }) {
   const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef(null);
 
   const filtered = useMemo(() => {
     let out = items;
@@ -66,8 +68,32 @@ export default function HomeView({
     });
   }, [items, activeTag]);
 
-  const paged = filtered.slice(0, PAGE_SIZE);
-  const showingAll = filtered.length <= PAGE_SIZE;
+  // 列表或标签变化时回到首屏
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [activeTag, items]);
+
+  const paged = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
+
+  const loadMore = useCallback(() => {
+    setVisibleCount((n) => Math.min(filtered.length, n + PAGE_SIZE));
+  }, [filtered.length]);
+
+  // 触底自动加载下一批
+  useEffect(() => {
+    if (!hasMore) return undefined;
+    const el = sentinelRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMore();
+      },
+      { root: null, rootMargin: '240px 0px', threshold: 0 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadMore, paged.length]);
 
   return (
     <PageShell home>
@@ -86,8 +112,7 @@ export default function HomeView({
               {activeTag ? (
                 <>标签 <strong>#{activeTag}</strong> · </>
               ) : null}
-              共 <strong>{filtered.length}</strong> 条
-              {!showingAll ? <> · 先展示前 {PAGE_SIZE} 条</> : null}
+              已显示 <strong>{paged.length}</strong> / 共 <strong>{filtered.length}</strong> 条
             </span>
           </div>
         )}
@@ -109,20 +134,37 @@ export default function HomeView({
                 className="!py-20 rise-in home-empty"
               />
             ) : (
-              <Row gutter={CARD_GUTTER}>
-                {paged.map((item, i) => (
-                  <Col key={item.id} {...CARD_RESPONSIVE} className="mb-3 sm:mb-5">
-                    <VideoCard
-                      item={item}
-                      index={i}
-                      onClick={onCardClick}
-                      favorited={favIds.has(item.id)}
-                      onToggleFavorite={onToggleFavorite}
-                      siteName={resolveSiteName(item.siteUrl, siteNameMap)}
-                    />
-                  </Col>
-                ))}
-              </Row>
+              <>
+                <Row gutter={CARD_GUTTER}>
+                  {paged.map((item, i) => (
+                    <Col key={item.id} {...CARD_RESPONSIVE} className="mb-3 sm:mb-5">
+                      <VideoCard
+                        item={item}
+                        index={i}
+                        onClick={onCardClick}
+                        favorited={favIds.has(item.id)}
+                        onToggleFavorite={onToggleFavorite}
+                        siteName={resolveSiteName(item.siteUrl, siteNameMap)}
+                      />
+                    </Col>
+                  ))}
+                </Row>
+                {hasMore ? (
+                  <div ref={sentinelRef} className="flex justify-center py-6">
+                    <Button
+                      type="default"
+                      onClick={loadMore}
+                      className="!font-bold !bg-white/5 !border-white/10 !text-ph-text-secondary hover:!text-ph-orange hover:!border-ph-orange/40"
+                    >
+                      加载更多（还有 {filtered.length - paged.length} 条）
+                    </Button>
+                  </div>
+                ) : filtered.length > PAGE_SIZE ? (
+                  <p className="text-center text-xs text-ph-text-tertiary py-6 m-0">
+                    已全部加载 · 共 {filtered.length} 条
+                  </p>
+                ) : null}
+              </>
             )}
           </Spin>
         )}

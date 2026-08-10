@@ -699,7 +699,7 @@ app.post('/api/search-online', async (req, res) => {
       searchPages,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 2,
+      concurrency: 3,
       pushEvery: 10,
       onBatch: () => { onIndexChanged(); },
       onLog: (m) => logs.push(m),
@@ -742,7 +742,7 @@ app.post('/api/sync-tags', async (req, res) => {
           limit: 50,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 2,
+          concurrency: 3,
           pushEvery: 10,
           onBatch: () => { onIndexChanged(); },
           onLog: (m) => tagLogs.push(m),
@@ -823,7 +823,7 @@ app.post('/api/sync-keywords', async (req, res) => {
         limit: 50,
         outDir: OUT_DIR,
         jsonPath: JSON_PATH,
-        concurrency: 2,
+        concurrency: 3,
         pushEvery: 10,
         onBatch: () => { onIndexChanged(); },
         onLog: (m) => kwLogs.push(m),
@@ -891,7 +891,7 @@ app.post('/api/sync-keywords', async (req, res) => {
 // 爬取耗时预估（同步弹窗倒计时用）
 app.get('/api/crawl-estimate', (req, res) => {
   const mode = String(req.query.mode || 'sync');
-  const concurrency = 2;
+  const concurrency = 3;
   let eta;
   if (mode === 'startup') {
     eta = estimateCrawlTime({ minPerSite: 50, concurrency });
@@ -925,7 +925,7 @@ app.post('/api/crawl', async (req, res) => {
       pageEnd,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 2,
+      concurrency: 3,
       pushEvery: 10,
       onBatch: () => { onIndexChanged(); },
       onLog: (m) => logs.push(m),
@@ -968,7 +968,7 @@ app.get('*', (req, res) => {
     // 启动后静默后台爬取：先估时，控制台倒计时
     (async () => {
       const t0 = Date.now();
-      const eta = estimateCrawlTime({ minPerSite: 50, concurrency: 2 });
+      const eta = estimateCrawlTime({ minPerSite: 50, concurrency: 3 });
       console.log(`  预计同步约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条`);
       const stopCountdown = startConsoleCountdown(eta.estimateSec, '  后台同步中…');
       try {
@@ -977,7 +977,7 @@ app.get('*', (req, res) => {
           replace: true,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 2,
+          concurrency: 3,
           pushEvery: 10,
           onBatch: () => { onIndexChanged(); },
           onLog: () => {},
