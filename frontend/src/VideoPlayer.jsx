@@ -261,14 +261,25 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
   const artRef = useRef(null);
   const onTagsRef = useRef(onTags);
   const loadGenRef = useRef(0);
+  const loadingTimerRef = useRef(null);
 
-  const [phase, setPhase] = useState(defer ? 'idle' : 'loading');
+  const [phase, setPhaseState] = useState(defer ? 'idle' : 'loading');
+  const phaseRef = useRef(defer ? 'idle' : 'loading');
   const [errorMsg, setErrorMsg] = useState('');
   const [loadingTip, setLoadingTip] = useState('正在准备播放…');
+  const [showSlowHint, setShowSlowHint] = useState(false);
 
   const activeVideo = videoProp || (item && item.video) || null;
+  const activeVideoRef = useRef(activeVideo);
+  activeVideoRef.current = activeVideo;
+  const activeVideoUrl = activeVideo?.url || '';
   const posterUrl = item.coverUrl ? `/api/cover/${item.id}` : '';
   onTagsRef.current = onTags;
+
+  const setPhase = useCallback((p) => {
+    phaseRef.current = p;
+    setPhaseState(p);
+  }, []);
 
   const loadSource = useCallback(async () => {
     const container = containerRef.current;
@@ -276,108 +287,233 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
     const gen = ++loadGenRef.current;
 
-    // 销毁旧的 Artplayer 实例
-    if (artRef.current) {
-      try {
-        artRef.current.destroy(false);
-      } catch (e) {
-        logPlayer('destroy failed', e);
-      }
-      artRef.current = null;
+    // 清除上一轮的加载看门狗
+    if (loadingTimerRef.current) {
+      const arr = Array.isArray(loadingTimerRef.current) ? loadingTimerRef.current : [loadingTimerRef.current];
+      arr.forEach((t) => clearTimeout(t));
+      loadingTimerRef.current = null;
     }
+    setShowSlowHint(false);
 
     setPhase('loading');
     setErrorMsg('');
-    setLoadingTip('正在刷新播放地址…');
+    setLoadingTip('正在加载视频流…');
 
-    let m3u8Url = activeVideo && activeVideo.url;
-    if (!m3u8Url) {
+    let currentUrl = activeVideoRef.current && activeVideoRef.current.url;
+    if (!currentUrl) {
       setPhase('none');
       return;
     }
 
-    // 刷新 m3u8 URL（鉴权 key 可能已过期），同时获取最新标签/日期/正文
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 60000);
-      const res = await fetch(`/api/refresh/${item.id}`, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (gen !== loadGenRef.current) return;
-      const data = await res.json();
-      if (gen !== loadGenRef.current) return;
-      if (!res.ok) {
-        logPlayer('refresh failed', { id: item.id, status: res.status, data });
-      } else if (data.ok) {
-        const cb = onTagsRef.current;
-        if (typeof cb === 'function') {
-          cb(data.tags || [], data.category || null, data.datePublished || null, {
-            content: data.content,
-            images: data.images,
-            videos: data.videos,
-            blocks: data.blocks,
-          });
-        }
-        const refreshedList = Array.isArray(data.videos) && data.videos.length
-          ? data.videos
-          : (data.video ? [data.video] : []);
-        // 尽量保持当前片段：按 url 匹配，否则按索引回退到第一个
-        const matched = refreshedList.find((v) => v && v.url && activeVideo && v.url.split('?')[0] === activeVideo.url.split('?')[0])
-          || refreshedList.find((v) => v && activeVideo && v.title && v.title === activeVideo.title)
-          || refreshedList[0];
-        if (matched && matched.url) m3u8Url = matched.url;
-      } else {
-        logPlayer('refresh returned not ok', { id: item.id, data });
+    // 跨异步闭包共享的状态（定时器需要读取最新值）
+    const refreshDoneRef = { current: false };   // 后台刷新是否完成
+    const playerAliveRef = { current: true };      // 播放器是否仍存活（未发生致命错误）
+
+    // ─── 加载看门狗 ───
+    // 12s：显示"加载较慢"提示 + 刷新按钮（不打断播放器）
+    // 25s：强制超时报错（若刷新仍在进行则再延 15s）
+    const clearWatchdog = () => {
+      if (loadingTimerRef.current) {
+        const arr = Array.isArray(loadingTimerRef.current) ? loadingTimerRef.current : [loadingTimerRef.current];
+        arr.forEach((t) => clearTimeout(t));
+        loadingTimerRef.current = null;
       }
-    } catch (err) {
-      const timedOut = err && (err.name === 'AbortError' || /abort/i.test(err.message || ''));
-      logPlayer('refresh error', {
-        id: item.id,
-        timedOut,
-        message: err && err.message,
-        error: err,
-      });
-      // Fall through to stored URL.
-    }
+      if (gen === loadGenRef.current) setShowSlowHint(false);
+    };
 
-    if (gen !== loadGenRef.current) return;
-    setLoadingTip('正在加载视频流…');
+    const startWatchdog = () => {
+      clearWatchdog();
+      const timers = [];
+      loadingTimerRef.current = timers;
 
-    // 临时清空容器，重新创建 Artplayer
-    container.innerHTML = '';
+      // 12s：显示慢加载提示
+      timers.push(setTimeout(() => {
+        if (gen !== loadGenRef.current) return;
+        if (phaseRef.current !== 'loading') return;
+        setShowSlowHint(true);
+        logPlayer('loading slow hint', { id: item.id, elapsed: '12s' });
+      }, 12000));
 
-    const video = document.createElement('video');
-    video.setAttribute('playsinline', '');
-    video.setAttribute('webkit-playsinline', '');
+      // 25s：硬超时
+      timers.push(setTimeout(() => {
+        if (gen !== loadGenRef.current) return;
+        if (phaseRef.current !== 'loading') return;
 
-    try {
-      const art = createArtplayer({
-        container,
-        video,
-        m3u8Url,
-        onReady: () => {
-          if (gen !== loadGenRef.current) return;
-          setPhase('ready');
-          if (!autoplay) return;
-          try {
-            art.play().catch((e) => logPlayer('autoplay blocked', e && e.message));
-          } catch (e) {
-            logPlayer('autoplay failed', e);
-          }
-        },
-        onError: (msg) => {
-          if (gen !== loadGenRef.current) return;
-          setErrorMsg(msg || '播放失败');
-          setPhase('error');
-        },
-      });
-      artRef.current = art;
-    } catch (e) {
-      logPlayer('artplayer init failed', e);
+        if (!refreshDoneRef.current) {
+          // 刷新仍在进行，再等 15s
+          setLoadingTip('刷新较慢，正在等待刷新结果…');
+          timers.push(setTimeout(() => {
+            if (gen !== loadGenRef.current) return;
+            if (phaseRef.current !== 'loading') return;
+            logPlayer('loading hard timeout (after refresh wait)', { id: item.id });
+            clearWatchdog();
+            setErrorMsg('视频加载超时，请检查网络后点击刷新重试');
+            setPhase('error');
+          }, 15000));
+          return;
+        }
+
+        logPlayer('loading hard timeout', { id: item.id });
+        clearWatchdog();
+        setErrorMsg('视频加载超时，请检查网络后点击刷新重试');
+        setPhase('error');
+      }, 25000));
+    };
+
+    // ─── 创建播放器实例 ───
+    const createPlayer = (url, isFallback) => {
+      playerAliveRef.current = true;
+
+      // 销毁旧实例（含 HLS）
+      if (artRef.current) {
+        try {
+          if (artRef.current.hls) artRef.current.hls.destroy();
+          artRef.current.destroy(false);
+        } catch (e) {
+          logPlayer('destroy failed', e);
+        }
+        artRef.current = null;
+      }
+
+      container.innerHTML = '';
+      const video = document.createElement('video');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('webkit-playsinline', '');
+
+      try {
+        const art = createArtplayer({
+          container,
+          video,
+          m3u8Url: url,
+          onReady: () => {
+            if (gen !== loadGenRef.current) return;
+            clearWatchdog();
+            setPhase('ready');
+            if (!autoplay && !isFallback) return;
+            try {
+              art.play().catch((e) => logPlayer('autoplay blocked', e && e.message));
+            } catch (e) {
+              logPlayer('autoplay failed', e);
+            }
+          },
+          onError: (msg) => {
+            if (gen !== loadGenRef.current) return;
+            playerAliveRef.current = false; // 播放器已死
+
+            if (!refreshDoneRef.current) {
+              // 刷新尚未完成：可能是地址过期，回到 loading 等待刷新结果
+              setLoadingTip('正在刷新播放地址…');
+              setPhase('loading');
+              // 看门狗继续运行，会在 25s 后强制超时
+            } else {
+              // 刷新已完成但仍报错 → 直接显示错误 + 刷新按钮
+              clearWatchdog();
+              setErrorMsg(msg || '播放失败');
+              setPhase('error');
+            }
+          },
+        });
+        artRef.current = art;
+        // 启动本轮加载看门狗
+        startWatchdog();
+      } catch (e) {
+        logPlayer('artplayer init failed', e);
+        if (gen !== loadGenRef.current) return;
+        clearWatchdog();
+        setErrorMsg('播放器初始化失败');
+        setPhase('error');
+      }
+    };
+
+    // ─── 后台异步刷新（不阻塞播放器启动）───
+    const refreshPromise = (async () => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 30000); // 30s 超时（原 60s 太长）
+        const res = await fetch(`/api/refresh/${item.id}`, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (gen !== loadGenRef.current) return null;
+        const data = await res.json();
+        if (gen !== loadGenRef.current) return null;
+        return data;
+      } catch (err) {
+        const timedOut = err && (err.name === 'AbortError' || /abort/i.test(err.message || ''));
+        logPlayer('refresh error', {
+          id: item.id,
+          timedOut,
+          message: err && err.message,
+          error: err,
+        });
+        return null;
+      }
+    })();
+
+    // ─── 刷新完成后：更新元数据 + 必要时热切换地址 ───
+    refreshPromise.then((data) => {
       if (gen !== loadGenRef.current) return;
-      setErrorMsg('播放器初始化失败');
-      setPhase('error');
-    }
-  }, [item.id, activeVideo, autoplay]);
+      refreshDoneRef.current = true;
+
+      if (!data || !data.ok) {
+        logPlayer('refresh returned not ok', { id: item.id, data });
+
+        // 刷新失败且播放器已死（仍在 loading）→ 显示错误
+        if (phaseRef.current === 'loading' && !playerAliveRef.current) {
+          clearWatchdog();
+          setErrorMsg(data && data.error ? data.error : '刷新播放地址失败，请重试');
+          setPhase('error');
+        }
+        // 播放器仍存活 → 让看门狗自行处理（25s 后超时或正常就绪）
+        return;
+      }
+
+      // 更新标签 / 正文 / 配图 / 视频列表
+      const cb = onTagsRef.current;
+      if (typeof cb === 'function') {
+        cb(data.tags || [], data.category || null, data.datePublished || null, {
+          content: data.content,
+          images: data.images,
+          videos: data.videos,
+          blocks: data.blocks,
+        });
+      }
+
+      // 匹配当前视频的新地址
+      const refreshedList = Array.isArray(data.videos) && data.videos.length
+        ? data.videos
+        : (data.video ? [data.video] : []);
+      const av = activeVideoRef.current;
+      const matched = refreshedList.find((v) => v && v.url && av && v.url.split('?')[0] === av.url.split('?')[0])
+        || refreshedList.find((v) => v && av && v.title && v.title === av.title)
+        || refreshedList[0];
+
+      if (matched && matched.url && matched.url !== currentUrl) {
+        // 地址变了：播放器尚未就绪 → 用新地址重启
+        if (phaseRef.current === 'loading' || phaseRef.current === 'error') {
+          logPlayer('refresh done, swapping to fresh URL', {
+            old: currentUrl && currentUrl.slice(0, 80),
+            new: matched.url && matched.url.slice(0, 80),
+          });
+          currentUrl = matched.url;
+          setErrorMsg('');
+          setLoadingTip('正在加载视频流…');
+          setPhase('loading');
+          createPlayer(matched.url, true);
+        }
+        // 播放器已就绪 → 不打扰，仅更新元数据
+      } else if (phaseRef.current === 'loading' && !playerAliveRef.current) {
+        // 地址没变但播放器已死（HLS 报错后回退到 loading）→ 用刷新后的地址重启
+        if (matched && matched.url) currentUrl = matched.url;
+        logPlayer('refresh done, same URL, restarting dead player', { id: item.id });
+        setErrorMsg('');
+        setLoadingTip('正在加载视频流…');
+        createPlayer(currentUrl, true);
+      }
+      // 地址没变且播放器仍存活 → 正常等待 HLS 自行加载完成
+    });
+
+    // 立即用存储的地址启动播放器（不等刷新）
+    createPlayer(currentUrl, false);
+  }, [item.id, activeVideoUrl, autoplay, setPhase]);
 
   useEffect(() => {
     if (defer) return undefined;
@@ -387,8 +523,14 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
   useEffect(() => () => {
     loadGenRef.current++;
+    if (loadingTimerRef.current) {
+      const arr = Array.isArray(loadingTimerRef.current) ? loadingTimerRef.current : [loadingTimerRef.current];
+      arr.forEach((t) => clearTimeout(t));
+      loadingTimerRef.current = null;
+    }
     if (artRef.current) {
       try {
+        if (artRef.current.hls) artRef.current.hls.destroy();
         artRef.current.destroy(false);
       } catch (e) {
         logPlayer('cleanup destroy failed', e);
@@ -433,8 +575,22 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       )}
 
       {phase === 'loading' && (
-        <div className="v-overlay absolute inset-0 z-[7] flex items-center justify-center bg-black/40 pointer-events-none">
+        <div className="v-overlay absolute inset-0 z-[7] flex flex-col items-center justify-center bg-black/40">
           <Spin size="large" tip={loadingTip} />
+          {showSlowHint && (
+            <div className="mt-5 flex flex-col items-center gap-2">
+              <p className="text-sm text-white/80">加载时间较长，可点击刷新重试</p>
+              <Button
+                type="primary"
+                size="middle"
+                icon={<ReloadOutlined />}
+                onClick={retry}
+                danger
+              >
+                刷新重试
+              </Button>
+            </div>
+          )}
         </div>
       )}
       {phase === 'none' && (

@@ -84,6 +84,7 @@ app.use(express.static(BUILD_DIR));
 
 // 索引内存缓存，避免每次请求都读盘解析
 let indexCache = null;
+let indexIdMap = null;   // id → 索引位置，O(1) 查找
 let indexMtimeMs = -1;
 let favCache = null;
 let favMtimeMs = -1;
@@ -93,12 +94,24 @@ function getIndex() {
     const mtime = fs.statSync(JSON_PATH).mtimeMs;
     if (indexCache && mtime === indexMtimeMs) return indexCache;
     indexCache = loadIndex(JSON_PATH);
+    indexIdMap = new Map();
+    for (let i = 0; i < indexCache.length; i++) {
+      indexIdMap.set(indexCache[i].id, i);
+    }
     indexMtimeMs = mtime;
     return indexCache;
   } catch (_) {
     indexCache = [];
+    indexIdMap = new Map();
     indexMtimeMs = -1;
     return indexCache;
+  }
+}
+
+function rebuildIdMap(articles) {
+  indexIdMap = new Map();
+  for (let i = 0; i < articles.length; i++) {
+    indexIdMap.set(articles[i].id, i);
   }
 }
 
@@ -106,6 +119,7 @@ function writeIndex(articles) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(JSON_PATH, JSON.stringify(articles, null, 2), 'utf8');
   indexCache = articles;
+  rebuildIdMap(articles);
   try {
     indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs;
   } catch (_) {
@@ -113,9 +127,51 @@ function writeIndex(articles) {
   }
 }
 
+/** 异步写索引：内存缓存立即更新，磁盘写入不阻塞响应 */
+function writeIndexAsync(articles) {
+  indexCache = articles;
+  rebuildIdMap(articles);
+  const data = JSON.stringify(articles, null, 2);
+  fs.writeFile(JSON_PATH, data, 'utf8', (err) => {
+    if (err) {
+      console.warn('[index] async write failed:', err.message);
+      return;
+    }
+    try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
+  });
+}
+
+// 刷新结果缓存：避免短时间内重复抓取同一详情页
+const refreshCache = new Map();
+const REFRESH_CACHE_TTL = 120000; // 2 分钟
+
+function getCachedRefresh(id) {
+  const entry = refreshCache.get(id);
+  if (!entry) return null;
+  if (Date.now() > entry.expiry) {
+    refreshCache.delete(id);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedRefresh(id, data) {
+  refreshCache.set(id, { data, expiry: Date.now() + REFRESH_CACHE_TTL });
+  // 限制缓存大小：淘汰最旧的条目
+  if (refreshCache.size > 200) {
+    let oldestKey = null;
+    let oldestExpiry = Infinity;
+    for (const [k, v] of refreshCache) {
+      if (v.expiry < oldestExpiry) { oldestExpiry = v.expiry; oldestKey = k; }
+    }
+    if (oldestKey) refreshCache.delete(oldestKey);
+  }
+}
+
 // 爬虫改写 index.json 后调用，强制下次 getIndex 重新读盘
 function bustIndexCache() {
   indexCache = null;
+  indexIdMap = null;
   indexMtimeMs = -1;
 }
 
@@ -185,9 +241,16 @@ function toVideoItem(a) {
   };
 }
 
-/** 按 id 查找：优先索引，其次收藏（收藏不被爬取清空） */
+/** 按 id 查找：优先索引（O(1) map），其次收藏（收藏不被爬取清空） */
 function findById(id) {
   const index = getIndex();
+  if (indexIdMap) {
+    const idx = indexIdMap.get(id);
+    if (idx !== undefined && idx < index.length && index[idx].id === id) {
+      return { item: index[idx], source: 'index' };
+    }
+  }
+  // 安全兜底：map 过期或未命中时线性扫描
   for (let i = 0; i < index.length; i++) {
     if (index[i].id === id) return { item: index[i], source: 'index' };
   }
@@ -543,6 +606,13 @@ app.get('/api/refresh/:id', async (req, res) => {
   const found = findById(req.params.id);
   if (!found) return res.status(404).json({ error: 'not found' });
   const target = found.item;
+
+  // 命中缓存直接返回（2 分钟 TTL，避免短时间重复抓取上游）
+  const cached = getCachedRefresh(req.params.id);
+  if (cached) {
+    return res.json(cached);
+  }
+
   try {
     const refererSite = refererFor(target);
     const r = await axios.get(target.url, {
@@ -557,20 +627,21 @@ app.get('/api/refresh/:id', async (req, res) => {
       ? detail.videos
       : (detail.video ? [detail.video] : []);
     if (rawVideos.length) {
-      const resolvedVideos = [];
-      for (const v of rawVideos) {
+      // 并行解析所有播放器地址（原先逐个串行，多视频时耗时翻倍）
+      const resolvedVideos = (await Promise.all(rawVideos.map(async (v) => {
         const entry = { ...v };
         if (entry.needsResolve) {
           const resolved = await resolvePlayerUrl(refererSite, entry.url, (m) => console.log(m));
           if (resolved) {
             entry.url = resolved;
             entry.needsResolve = false;
-            resolvedVideos.push(entry);
+            return entry;
           }
-        } else if (entry.url) {
-          resolvedVideos.push(entry);
+          return null;
         }
-      }
+        return entry.url ? entry : null;
+      }))).filter(Boolean);
+
       if (resolvedVideos.length) {
         target.videos = resolvedVideos;
         target.video = resolvedVideos[0];
@@ -614,14 +685,16 @@ app.get('/api/refresh/:id', async (req, res) => {
 
     if (Object.keys(patch).length) {
       if (found.source === 'index') {
-        writeIndex(getIndex());
+        // 异步写盘不阻塞响应（内存缓存已即时更新）
+        writeIndexAsync(getIndex());
         // Keep the favorited snapshot in sync when present.
         patchFavoriteById(target.id, patch);
       } else {
         writeFavorites(getFavorites());
       }
     }
-    res.json({
+
+    const responseData = {
       ok: true,
       video: target.video,
       videos: target.videos || (target.video ? [target.video] : []),
@@ -631,7 +704,11 @@ app.get('/api/refresh/:id', async (req, res) => {
       content: target.content || '',
       images: target.images || [],
       blocks: target.blocks || [],
-    });
+    };
+
+    // 缓存刷新结果
+    setCachedRefresh(req.params.id, responseData);
+    res.json(responseData);
   } catch (err) {
     const info = requestErrorInfo(err, target.url);
     console.error('[refresh]', req.params.id, info);

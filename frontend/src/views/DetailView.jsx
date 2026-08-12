@@ -165,7 +165,13 @@ export default function DetailView({
     }
     if (extra && Array.isArray(extra.videos) && extra.videos.length) {
       const next = extra.videos.filter((v) => v && v.url);
-      if (next.length) setLocalVideos(next);
+      if (next.length) {
+        // Only update if video URLs actually changed — prevents
+        // VideoPlayer from re-mounting (causes flicker between ready/loading)
+        const oldUrls = localVideos.map((v) => v.url).join('\n');
+        const newUrls = next.map((v) => v.url).join('\n');
+        if (oldUrls !== newUrls) setLocalVideos(next);
+      }
     }
   };
 
