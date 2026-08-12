@@ -166,8 +166,8 @@ export default function DetailView({
     if (extra && Array.isArray(extra.videos) && extra.videos.length) {
       const next = extra.videos.filter((v) => v && v.url);
       if (next.length) {
-        // Only update if video URLs actually changed — prevents
-        // VideoPlayer from re-mounting (causes flicker between ready/loading)
+        // 仅在视频地址确实变更时更新 — 防止
+        // VideoPlayer 重新挂载（导致 ready/loading 状态间闪烁）
         const oldUrls = localVideos.map((v) => v.url).join('\n');
         const newUrls = next.map((v) => v.url).join('\n');
         if (oldUrls !== newUrls) setLocalVideos(next);

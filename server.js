@@ -129,7 +129,7 @@ function writeIndex(articles) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const data = JSON.stringify(articles, null, 2);
   fs.writeFile(JSON_PATH, data, 'utf8', (err) => {
-    if (err) { console.warn('[index] write failed:', err.message); return; }
+    if (err) { console.warn('[索引] 写入失败:', err.message); return; }
     try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
   });
 }
@@ -141,7 +141,7 @@ function writeIndexAsync(articles) {
   const data = JSON.stringify(articles, null, 2);
   fs.writeFile(JSON_PATH, data, 'utf8', (err) => {
     if (err) {
-      console.warn('[index] async write failed:', err.message);
+      console.warn('[索引] 异步写入失败:', err.message);
       return;
     }
     try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
@@ -216,7 +216,7 @@ function writeFavorites(list) {
   const data = JSON.stringify(list, null, 2);
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFile(FAV_PATH, data, 'utf8', (err) => {
-    if (err) { console.warn('[favorites] write failed:', err.message); return; }
+    if (err) { console.warn('[收藏] 写入失败:', err.message); return; }
     try { favMtimeMs = fs.statSync(FAV_PATH).mtimeMs; } catch (_) {}
   });
 }
@@ -312,25 +312,25 @@ function rewriteM3u8(text, playlistUrl) {
 }
 
 app.get('/proxy/*', async (req, res) => {
-  // Express has already decoded the splat once — use as-is.
+  // Express 已解码过 splat 参数，直接使用
   let targetUrl = req.params[0];
-  if (!targetUrl) return res.status(400).send('bad url');
-  // Only decode if the value still looks percent-encoded (non-Express clients).
+  if (!targetUrl) return res.status(400).send('无效地址');
+  // 仅当值看起来仍为百分号编码时才解码（非 Express 客户端的情况）
   if (!/^https?:\/\//i.test(targetUrl) && /%[0-9a-f]{2}/i.test(targetUrl)) {
     try {
       targetUrl = decodeURIComponent(targetUrl);
     } catch (_) {
-      return res.status(400).send('bad url');
+      return res.status(400).send('无效地址');
     }
   }
   if (!/^https?:\/\//i.test(targetUrl)) {
-    return res.status(400).send('invalid url');
+    return res.status(400).send('无效地址');
   }
 
   const rawTarget = targetUrl;
   targetUrl = normalizeUpstreamUrl(targetUrl);
   if (targetUrl !== rawTarget) {
-    console.log('[proxy] unwrapped nested CDN proxy', shortUrl(rawTarget), '->', shortUrl(targetUrl));
+    console.log('[代理] 已展开嵌套CDN代理', shortUrl(rawTarget), '->', shortUrl(targetUrl));
   }
 
   let referer;
@@ -359,7 +359,7 @@ app.get('/proxy/*', async (req, res) => {
     });
     const elapsed = Date.now() - t0;
     if (elapsed > 8000) {
-      console.warn('[proxy] slow upstream', { ms: elapsed, url: shortUrl(targetUrl), bytes: upstream.data && upstream.data.byteLength });
+      console.warn('[代理] 上游响应慢', { ms: elapsed, url: shortUrl(targetUrl), bytes: upstream.data && upstream.data.byteLength });
     }
     let ct = upstream.headers['content-type'] || 'application/octet-stream';
     if (/\.key(\?|$)/i.test(targetUrl)) ct = 'application/octet-stream';
@@ -380,10 +380,10 @@ app.get('/proxy/*', async (req, res) => {
     res.send(body);
   } catch (err) {
     const info = requestErrorInfo(err, targetUrl);
-    console.error('[proxy] failed', info);
+    console.error('[代理] 失败', info);
     const code = info.status || (info.timedOut ? 504 : 502);
     res.status(code).json({
-      error: `proxy error: ${err.message}`,
+      error: `代理错误: ${err.message}`,
       ...info,
     });
   }
@@ -398,7 +398,7 @@ app.get('/api/sites', (req, res) => {
 
 app.post('/api/sites', (req, res) => {
   const sites = req.body && req.body.sites;
-  if (!Array.isArray(sites)) return res.status(400).json({ error: 'sites array required' });
+  if (!Array.isArray(sites)) return res.status(400).json({ error: '需要站点数组' });
   // 规范化：去空白、补默认值、去重 url（保留首个）
   const seen = new Set();
   const clean = [];
@@ -537,7 +537,7 @@ function writeMediaCache(kind, id, index, buf, contentType) {
       updatedAt: new Date().toISOString(),
     }));
   } catch (e) {
-    console.warn('[media-cache] write failed:', e.message);
+    console.warn('[媒体缓存] 写入失败:', e.message);
   }
 }
 
@@ -581,7 +581,7 @@ async function fetchDecryptedImage(item, imageUrl, cacheKey) {
 app.get('/api/cover/:id', async (req, res) => {
   const found = findById(req.params.id);
   const item = found && found.item;
-  if (!item || !item.coverUrl) return res.status(404).send('no cover');
+  if (!item || !item.coverUrl) return res.status(404).send('无封面');
   try {
     const { buf, contentType } = await fetchDecryptedImage(item, item.coverUrl, {
       kind: 'cover',
@@ -592,9 +592,9 @@ app.get('/api/cover/:id', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buf);
   } catch (err) {
-    console.error('[cover]', req.params.id, err.message);
+    console.error('[封面]', req.params.id, err.message);
     const code = err.response && err.response.status ? err.response.status : 502;
-    res.status(code).send('cover error: ' + err.message);
+    res.status(code).send('封面错误: ' + err.message);
   }
 });
 
@@ -605,7 +605,7 @@ app.get('/api/image/:id/:index', async (req, res) => {
   const images = (item && Array.isArray(item.images)) ? item.images : [];
   const idx = Number(req.params.index);
   const imageUrl = images[idx];
-  if (!imageUrl) return res.status(404).send('no image');
+  if (!imageUrl) return res.status(404).send('无图片');
   try {
     const { buf, contentType } = await fetchDecryptedImage(item, imageUrl, {
       kind: 'image',
@@ -616,16 +616,16 @@ app.get('/api/image/:id/:index', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buf);
   } catch (err) {
-    console.error('[image]', req.params.id, idx, err.message);
+    console.error('[图片]', req.params.id, idx, err.message);
     const code = err.response && err.response.status ? err.response.status : 502;
-    res.status(code).send('image error: ' + err.message);
+    res.status(code).send('图片错误: ' + err.message);
   }
 });
 
 // 刷新单条 m3u8（auth_key 会过期），并更新标签/分类/正文/配图/全部视频
 app.get('/api/refresh/:id', async (req, res) => {
   const found = findById(req.params.id);
-  if (!found) return res.status(404).json({ error: 'not found' });
+  if (!found) return res.status(404).json({ error: '未找到' });
   const target = found.item;
 
   // 命中缓存直接返回（2 分钟 TTL，避免短时间重复抓取上游）
@@ -708,7 +708,7 @@ app.get('/api/refresh/:id', async (req, res) => {
       if (found.source === 'index') {
         // 异步写盘不阻塞响应（内存缓存已即时更新）
         writeIndexAsync(getIndex());
-        // Keep the favorited snapshot in sync when present.
+        // 收藏快照存在时同步更新
         patchFavoriteById(target.id, patch);
       } else {
         writeFavorites(getFavorites());
@@ -732,7 +732,7 @@ app.get('/api/refresh/:id', async (req, res) => {
     res.json(responseData);
   } catch (err) {
     const info = requestErrorInfo(err, target.url);
-    console.error('[refresh]', req.params.id, info);
+    console.error('[刷新]', req.params.id, info);
     res.status(502).json({ error: err.message, ...info });
   }
 });
@@ -766,11 +766,11 @@ app.get('/api/favorites/download', (req, res) => {
 
 app.post('/api/favorites', (req, res) => {
   const body = req.body || {};
-  if (!body.id) return res.status(400).json({ error: 'item id required' });
+  if (!body.id) return res.status(400).json({ error: '需要条目 ID' });
 
   const found = findById(body.id);
   const snapshot = toVideoItem(found ? found.item : body);
-  if (!snapshot.id) return res.status(400).json({ error: 'item id required' });
+  if (!snapshot.id) return res.status(400).json({ error: '需要条目 ID' });
 
   const favs = getFavorites();
   const existing = favs.find((a) => a.id === snapshot.id);
@@ -792,7 +792,7 @@ app.delete('/api/favorites', (req, res) => {
 app.delete('/api/favorites/:id', (req, res) => {
   const favs = getFavorites();
   const next = favs.filter((a) => a.id !== req.params.id);
-  if (next.length === favs.length) return res.status(404).json({ error: 'not found' });
+  if (next.length === favs.length) return res.status(404).json({ error: '未找到' });
   writeFavorites(next);
   res.json({ ok: true, total: next.length });
 });
@@ -826,7 +826,7 @@ app.get('/api/sync-events', (req, res) => {
 // 在线搜索并入库
 app.post('/api/search-online', async (req, res) => {
   const keyword = (req.body && req.body.keyword) || '';
-  if (!keyword) return res.status(400).json({ error: 'keyword required' });
+  if (!keyword) return res.status(400).json({ error: '需要关键词' });
   const searchPages = parseInt(req.body && req.body.pages, 10) || 1;
   const logs = [];
   try {
@@ -835,12 +835,12 @@ app.post('/api/search-online', async (req, res) => {
       searchPages,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 3,
-      pushEvery: 10,
+      concurrency: 15,
+      pushEvery: 5,
       onBatch: () => { onIndexChanged(); },
       onLog: (m) => logs.push(m),
     });
-    // Crawl rewrote index.json; bust the mtime cache so getIndex reloads.
+    // 爬虫已重写 index.json；清除 mtime 缓存使 getIndex 重新加载
     onIndexChanged();
     const all = getPlayableVideos();
     const qlc = keyword.toLowerCase();
@@ -857,15 +857,15 @@ app.post('/api/search-online', async (req, res) => {
 // 多标签顺序同步
 app.post('/api/sync-tags', async (req, res) => {
   const tags = (req.body && req.body.tags) || [];
-  if (!Array.isArray(tags) || tags.length === 0) return res.status(400).json({ error: 'tags array required' });
+  if (!Array.isArray(tags) || tags.length === 0) return res.status(400).json({ error: '需要标签数组' });
   const searchPages = parseInt(req.body && req.body.pages, 10) || 1;
   const logs = [`开始同步 ${tags.length} 个标签: ${tags.join(', ')}`];
   try {
-    // Capture baseline count before crawling
+    // 抓取前记录基线数量
     const existingIndex = loadIndex(JSON_PATH);
     const baselineCount = existingIndex.length;
 
-    // Run tag searches sequentially to avoid race condition on index.json
+    // 标签搜索顺序执行，避免对 index.json 的竞态条件
     let totalAdded = 0;
     for (const tag of tags) {
       const tagLogs = [];
@@ -878,8 +878,8 @@ app.post('/api/sync-tags', async (req, res) => {
           limit: 50,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 3,
-          pushEvery: 10,
+          concurrency: 15,
+          pushEvery: 5,
           onBatch: () => { onIndexChanged(); },
           onLog: (m) => tagLogs.push(m),
         });
@@ -891,7 +891,7 @@ app.post('/api/sync-tags', async (req, res) => {
       logs.push(...tagLogs);
     }
 
-    // Load final result and calculate actual additions
+    // 加载最终结果并计算实际新增数量
     onIndexChanged();
     const currentIndex = getIndex();
     const actualAdded = currentIndex.length - baselineCount;
@@ -931,7 +931,7 @@ function withIndexLock(task) {
 app.post('/api/sync-keywords', async (req, res) => {
   const keywords = (req.body && req.body.keywords) || [];
   if (!Array.isArray(keywords) || keywords.length === 0) {
-    return res.status(400).json({ error: 'keywords array required' });
+    return res.status(400).json({ error: '需要关键词数组' });
   }
 
   // 加载进度（keyword -> lastPage）
@@ -959,8 +959,8 @@ app.post('/api/sync-keywords', async (req, res) => {
         limit: 50,
         outDir: OUT_DIR,
         jsonPath: JSON_PATH,
-        concurrency: 3,
-        pushEvery: 10,
+        concurrency: 15,
+        pushEvery: 5,
         onBatch: () => { onIndexChanged(); },
         onLog: (m) => kwLogs.push(m),
       }));
@@ -1061,8 +1061,8 @@ app.post('/api/crawl', async (req, res) => {
       pageEnd,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 3,
-      pushEvery: 10,
+      concurrency: 15,
+      pushEvery: 5,
       onBatch: () => { onIndexChanged(); },
       onLog: (m) => logs.push(m),
     });
@@ -1080,7 +1080,7 @@ app.get('*', (req, res) => {
 
 // 统一错误处理中间件：捕获所有未处理的异常，统一返回 JSON
 app.use((err, req, res, _next) => {
-  console.error('[unhandled error]', err.message);
+  console.error('[未处理错误]', err.message);
   const status = err.status || (err.response && err.response.status) || 500;
   res.status(status).json({ error: err.message || '内部错误' });
 });
@@ -1111,7 +1111,7 @@ app.use((err, req, res, _next) => {
     // 启动后静默后台爬取：先估时，控制台倒计时
     (async () => {
       const t0 = Date.now();
-      const eta = estimateCrawlTime({ minPerSite: 50, concurrency: 3 });
+      const eta = estimateCrawlTime({ minPerSite: 50, concurrency: 15 });
       console.log(`  预计同步约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条`);
       const stopCountdown = startConsoleCountdown(eta.estimateSec, '  后台同步中…');
       try {
@@ -1120,8 +1120,8 @@ app.use((err, req, res, _next) => {
           replace: true,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 3,
-          pushEvery: 10,
+          concurrency: 15,
+          pushEvery: 5,
           onBatch: () => { onIndexChanged(); },
           onLog: () => {},
         });

@@ -130,7 +130,7 @@ function buildSandbox(code) {
   vm.createContext(sb);
   vm.runInContext(code, sb, { timeout: 8000 });
   if (typeof sb.decryptImage !== 'function') {
-    throw new Error('decryptImage function not found in zzz.js');
+    throw new Error('在 zzz.js 中未找到 decryptImage 函数');
   }
   return sb;
 }
@@ -179,7 +179,7 @@ async function decryptBuffer(encryptedBuf, siteCandidates = []) {
 
   const base64str = encryptedBuf.toString('base64');
   const result = sb.decryptImage(base64str);
-  if (!result) throw new Error('decryption returned empty');
+  if (!result) throw new Error('解密返回空结果');
   return Buffer.from(result, 'base64');
 }
 
