@@ -8,6 +8,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const axios = require('axios');
+const { EventEmitter } = require('events');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
   loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getSites, getBaseUrl,
   estimateCrawlTime } = require('./crawler');
@@ -89,6 +90,13 @@ let indexMtimeMs = -1;
 let favCache = null;
 let favMtimeMs = -1;
 
+// 标签列表缓存（index 未变时完全相同，避免每次请求重算）
+let tagCache = null;
+
+// SSE 事件总线：爬虫每批写入后推送通知，前端不再需要轮询
+const syncEmitter = new EventEmitter();
+syncEmitter.setMaxListeners(20);
+
 function getIndex() {
   try {
     const mtime = fs.statSync(JSON_PATH).mtimeMs;
@@ -116,15 +124,14 @@ function rebuildIdMap(articles) {
 }
 
 function writeIndex(articles) {
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(JSON_PATH, JSON.stringify(articles, null, 2), 'utf8');
   indexCache = articles;
   rebuildIdMap(articles);
-  try {
-    indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs;
-  } catch (_) {
-    indexMtimeMs = Date.now();
-  }
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  const data = JSON.stringify(articles, null, 2);
+  fs.writeFile(JSON_PATH, data, 'utf8', (err) => {
+    if (err) { console.warn('[index] write failed:', err.message); return; }
+    try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
+  });
 }
 
 /** 异步写索引：内存缓存立即更新，磁盘写入不阻塞响应 */
@@ -183,10 +190,11 @@ function refreshTagList() {
   });
 }
 
-/** 索引变更后：清缓存并刷新标签 */
+/** 索引变更后：清缓存、失效标签缓存、推送 SSE 通知 */
 function onIndexChanged() {
   bustIndexCache();
-  return refreshTagList();
+  tagCache = null;
+  syncEmitter.emit('batch', { total: getIndex().length });
 }
 
 function getFavorites() {
@@ -204,14 +212,13 @@ function getFavorites() {
 }
 
 function writeFavorites(list) {
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(FAV_PATH, JSON.stringify(list, null, 2), 'utf8');
   favCache = list;
-  try {
-    favMtimeMs = fs.statSync(FAV_PATH).mtimeMs;
-  } catch (_) {
-    favMtimeMs = Date.now();
-  }
+  const data = JSON.stringify(list, null, 2);
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  fs.writeFile(FAV_PATH, data, 'utf8', (err) => {
+    if (err) { console.warn('[favorites] write failed:', err.message); return; }
+    try { favMtimeMs = fs.statSync(FAV_PATH).mtimeMs; } catch (_) {}
+  });
 }
 
 function toVideoItem(a) {
@@ -423,25 +430,39 @@ function getPlayableVideos() {
 }
 
 // 视频列表（?q= 本地搜索；仅返回已有视频地址的条目）
+// 支持分页 ?page=1&size=60（不传 page 则返回全量，向后兼容）
 app.get('/api/videos', (req, res) => {
   const all = getPlayableVideos();
   const q = (req.query.q || '').trim().toLowerCase();
-  const result = q
+  const filtered = q
     ? all.filter((a) => (a.title || '').toLowerCase().includes(q) || (a.id || '').includes(q))
     : all;
-  const items = result.map(toVideoItem);
-  res.json({ total: items.length, items });
+
+  const page = parseInt(req.query.page, 10);
+  const size = Math.min(parseInt(req.query.size, 10) || 60, 200);
+
+  if (page && page > 0) {
+    const start = (page - 1) * size;
+    const items = filtered.slice(start, start + size).map(toVideoItem);
+    res.json({ total: filtered.length, items, page, size, hasMore: start + size < filtered.length });
+  } else {
+    const items = filtered.map(toVideoItem);
+    res.json({ total: items.length, items });
+  }
 });
 
 // 展示用标签列表：过滤站点品牌、>=5 条才显示、按视频数排序；>100 条固定并持久化。
+// 结果缓存：index 未变时直接返回缓存，避免重复计算
 app.get('/api/tags', (req, res) => {
   try {
-    const { tags, fixedTags, newlyFixed } = refreshTagList();
+    if (!tagCache) {
+      tagCache = refreshTagList();
+    }
     res.json({
-      tags,
-      fixedTags,
-      newlyFixed,
-      total: tags.length,
+      tags: tagCache.tags,
+      fixedTags: tagCache.fixedTags,
+      newlyFixed: tagCache.newlyFixed,
+      total: tagCache.tags.length,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -762,12 +783,44 @@ app.post('/api/favorites', (req, res) => {
   res.json({ ok: true, total: favs.length, item: toVideoItem(entry) });
 });
 
+// 批量清空收藏（替代逐条 DELETE，一次请求完成）
+app.delete('/api/favorites', (req, res) => {
+  writeFavorites([]);
+  res.json({ ok: true, total: 0 });
+});
+
 app.delete('/api/favorites/:id', (req, res) => {
   const favs = getFavorites();
   const next = favs.filter((a) => a.id !== req.params.id);
   if (next.length === favs.length) return res.status(404).json({ error: 'not found' });
   writeFavorites(next);
   res.json({ ok: true, total: next.length });
+});
+
+// ---------- SSE：同步进度推送（替代前端 2.5s 轮询） ----------
+app.get('/api/sync-events', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  const onBatch = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+  syncEmitter.on('batch', onBatch);
+
+  // 保活心跳，防止代理/浏览器超时断开
+  const keepAlive = setInterval(() => {
+    res.write(': keepalive\n\n');
+  }, 30000);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    syncEmitter.off('batch', onBatch);
+  });
 });
 
 // 在线搜索并入库
@@ -1023,6 +1076,13 @@ app.post('/api/crawl', async (req, res) => {
 // SPA 兜底
 app.get('*', (req, res) => {
   res.sendFile(path.join(BUILD_DIR, 'index.html'));
+});
+
+// 统一错误处理中间件：捕获所有未处理的异常，统一返回 JSON
+app.use((err, req, res, _next) => {
+  console.error('[unhandled error]', err.message);
+  const status = err.status || (err.response && err.response.status) || 500;
+  res.status(status).json({ error: err.message || '内部错误' });
 });
 
 (async () => {

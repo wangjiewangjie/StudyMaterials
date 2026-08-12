@@ -162,6 +162,41 @@ async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders 
   throw lastErr;
 }
 
+// ---------- 站点级断路器 ----------
+// 连续失败 N 次后标记站点为"熔断"，一段时间内跳过该站，避免持续打已挂的站点。
+class SiteCircuitBreaker {
+  constructor(threshold = 5, cooldownMs = 60000) {
+    this.threshold = threshold;
+    this.cooldownMs = cooldownMs;
+    this.failures = new Map();  // site → 连续失败计数
+    this.tripped = new Map();   // site → 熔断时间戳
+  }
+  isTripped(site) {
+    const t = this.tripped.get(site);
+    if (!t) return false;
+    if (Date.now() - t > this.cooldownMs) {
+      this.tripped.delete(site);
+      this.failures.delete(site);
+      return false;
+    }
+    return true;
+  }
+  recordFailure(site) {
+    const n = (this.failures.get(site) || 0) + 1;
+    this.failures.set(site, n);
+    if (n >= this.threshold) {
+      this.tripped.set(site, Date.now());
+      return true; // newly tripped
+    }
+    return false;
+  }
+  recordSuccess(site) {
+    this.failures.delete(site);
+    this.tripped.delete(site);
+  }
+}
+const siteBreaker = new SiteCircuitBreaker();
+
 function parsePagesArg(arg) {
   if (!arg) return [1, 1];
   if (String(arg).includes('-')) {
@@ -621,9 +656,28 @@ function dedupeById(articles) {
   return out;
 }
 
-/** 对所有启用站并行执行 taskFn，汇总并去重；失败只记日志 */
+/** 对所有启用站并行执行 taskFn，汇总并去重；失败只记日志；断路器跳过已熔断站点 */
 async function mapAllSites(taskFn, log) {
-  const results = await Promise.allSettled(SITES.map((site) => taskFn(site)));
+  const activeSites = SITES.filter((site) => {
+    if (siteBreaker.isTripped(site)) {
+      log(`  [${site}] circuit breaker open, skipping`);
+      return false;
+    }
+    return true;
+  });
+
+  const results = await Promise.allSettled(activeSites.map(async (site) => {
+    try {
+      const result = await taskFn(site);
+      siteBreaker.recordSuccess(site);
+      return result;
+    } catch (err) {
+      const newlyTripped = siteBreaker.recordFailure(site);
+      if (newlyTripped) log(`  [${site}] circuit breaker tripped (consecutive failures)`);
+      throw err;
+    }
+  }));
+
   const aggregated = [];
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
@@ -631,7 +685,7 @@ async function mapAllSites(taskFn, log) {
       const arts = Array.isArray(r.value) ? r.value : (r.value && r.value.articles) || [];
       for (const a of arts) aggregated.push(a);
     } else {
-      log(`  [${SITES[i]}] FAILED: ${r.reason && r.reason.message}`);
+      log(`  [${activeSites[i]}] FAILED: ${r.reason && r.reason.message}`);
     }
   }
   return dedupeById(aggregated);
@@ -708,10 +762,12 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
     const results = await Promise.allSettled(
       SITES.map(async (site) => {
         if (exhaustedSites.has(site)) return { site, exhausted: true };
+        if (siteBreaker.isTripped(site)) return { site, exhausted: true };
         if (siteIds[site].size >= minArticles) return { site, met: true };
         log(`[minPerSite] ${site} page ${pageNum}`);
         try {
           const res = await getWithRetry(listPageUrl(site, pageNum), client, 3, headersFor(site));
+          siteBreaker.recordSuccess(site);
           const arts = parseListPage(res.data, site);
           let newCount = 0;
           for (const a of arts) {
@@ -731,7 +787,8 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
           if (is404) {
             log(`  [${site}] page ${pageNum} -> 404, site exhausted`);
           } else {
-            log(`  [${site}] FAILED page ${pageNum}: ${err.message}`);
+            const newlyTripped = siteBreaker.recordFailure(site);
+            log(`  [${site}] FAILED page ${pageNum}: ${err.message}${newlyTripped ? ' (circuit breaker tripped)' : ''}`);
           }
           return { site, exhausted: true };
         }

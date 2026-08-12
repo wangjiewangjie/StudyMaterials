@@ -45,6 +45,12 @@ export async function removeFavorite(id) {
   return res.json();
 }
 
+/** 批量清空所有收藏（一次请求，替代逐条 DELETE） */
+export async function clearAllFavoritesAPI() {
+  const res = await fetch('/api/favorites', { method: 'DELETE' });
+  return res.json();
+}
+
 export function downloadFavorites(format) {
   window.location.href = `/api/favorites/download?format=${format}`;
 }

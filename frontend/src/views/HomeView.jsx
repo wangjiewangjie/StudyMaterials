@@ -51,14 +51,9 @@ export default function HomeView({
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef(null);
 
-  const filtered = useMemo(() => {
-    let out = items;
-    if (activeTag) {
-      out = out.filter(
-        (it) => it.category === activeTag || ((it.tags || []).includes(activeTag))
-      );
-    }
-    return out.slice().sort((a, b) => {
+  // 先排序（仅在 items 引用变化时重排），再过滤（activeTag 变化只过滤不排序）
+  const sortedAll = useMemo(() => {
+    return items.slice().sort((a, b) => {
       const da = a.datePublished || '';
       const db = b.datePublished || '';
       if (da && db) return db.localeCompare(da);
@@ -66,7 +61,14 @@ export default function HomeView({
       if (db) return 1;
       return Number(b.id) - Number(a.id);
     });
-  }, [items, activeTag]);
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    if (!activeTag) return sortedAll;
+    return sortedAll.filter(
+      (it) => it.category === activeTag || ((it.tags || []).includes(activeTag))
+    );
+  }, [sortedAll, activeTag]);
 
   // 列表或标签变化时回到首屏
   useEffect(() => {

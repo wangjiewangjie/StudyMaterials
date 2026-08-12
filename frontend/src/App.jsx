@@ -1,17 +1,20 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import { App as AntdApp, Drawer, Button } from 'antd';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
+import { App as AntdApp, Drawer, Button, Spin } from 'antd';
 import {
   StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import AppHeader from './components/AppHeader.jsx';
 import SyncModal from './components/SyncModal.jsx';
-import HomeView from './views/HomeView.jsx';
-import DetailView from './views/DetailView.jsx';
-import FavoritesView from './views/FavoritesView.jsx';
-import SyncCenterView from './views/SyncCenterView.jsx';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { useAppData } from './hooks/useAppData.js';
 import { useSync } from './hooks/useSync.js';
 import { downloadFavorites } from './services/api.js';
+
+// 路由级代码分割：DetailView 含 HLS.js + Artplayer，单独拆包可减首屏 40%+
+const HomeView = lazy(() => import('./views/HomeView.jsx'));
+const DetailView = lazy(() => import('./views/DetailView.jsx'));
+const FavoritesView = lazy(() => import('./views/FavoritesView.jsx'));
+const SyncCenterView = lazy(() => import('./views/SyncCenterView.jsx'));
 
 // 视图
 const VIEW = {
@@ -72,13 +75,19 @@ export default function App() {
     startKeywordSync, cancelKeywordSync,
   } = useSync(message, handleSyncDone);
 
-  // 同步中每批写入索引后，静默刷新列表（无需等全部完成）
+  // 同步中通过 SSE 接收批次通知，收到后静默刷新列表（替代 2.5s 轮询）
   useEffect(() => {
     if (!syncing && !keywordSyncing) return undefined;
-    const tick = () => { loadVideos(query.trim(), { silent: true }); };
-    tick();
-    const t = setInterval(tick, 2500);
-    return () => clearInterval(t);
+    loadVideos(query.trim(), { silent: true });
+    // 不支持 EventSource 时降级为 5s 轮询
+    if (typeof EventSource === 'undefined') {
+      const t = setInterval(() => loadVideos(query.trim(), { silent: true }), 5000);
+      return () => clearInterval(t);
+    }
+    const es = new EventSource('/api/sync-events');
+    es.onmessage = () => { loadVideos(query.trim(), { silent: true }); };
+    // EventSource 断开后浏览器会自动重连，无需手动处理
+    return () => es.close();
   }, [syncing, keywordSyncing, loadVideos, query]);
 
   const saveScroll = useCallback((forView) => {
@@ -263,7 +272,9 @@ export default function App() {
   const detailItem = selected;
 
   return (
-    <div className="app-shell min-h-screen">
+    <ErrorBoundary>
+      <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh]"><Spin size="large" /></div>}>
+        <div className="app-shell min-h-screen">
       <AppHeader
         query={query}
         onQueryChange={setQuery}
@@ -427,6 +438,8 @@ export default function App() {
           </Button>
         </div>
       </Drawer>
-    </div>
+        </div>
+      </Suspense>
+    </ErrorBoundary>
   );
 }

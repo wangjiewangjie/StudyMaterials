@@ -1,75 +1,12 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useReducer, useCallback } from 'react';
 import { Spin, Button, Result } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import Artplayer from 'artplayer';
 import Hls from 'hls.js';
-
-function unwrapCdnProxyUrl(url, maxDepth = 8) {
-  if (!url || typeof url !== 'string') return url;
-  let current = url;
-  for (let i = 0; i < maxDepth; i++) {
-    let u;
-    try {
-      u = new URL(current);
-    } catch (_) {
-      break;
-    }
-    const m = u.pathname.match(/^\/proxy\/(.+)$/i);
-    if (!m) break;
-    let inner;
-    try {
-      inner = decodeURIComponent(m[1]);
-    } catch (_) {
-      break;
-    }
-    if (!/^https?:\/\//i.test(inner)) break;
-    current = inner;
-  }
-  return current;
-}
-
-function extractLocalProxyTarget(url) {
-  if (!url) return url;
-  if (/^\/proxy\//i.test(url)) {
-    try {
-      return decodeURIComponent(url.replace(/^\/proxy\//i, ''));
-    } catch (_) {
-      return url;
-    }
-  }
-  try {
-    const u = new URL(url, window.location.origin);
-    if (u.origin !== window.location.origin || !/^\/proxy\//i.test(u.pathname)) return url;
-    return decodeURIComponent(u.pathname.replace(/^\/proxy\//i, ''));
-  } catch (_) {
-    return url;
-  }
-}
-
-function normalizeUpstreamUrl(url) {
-  return unwrapCdnProxyUrl(extractLocalProxyTarget(url));
-}
-
-function proxyUrl(url) {
-  return '/proxy/' + encodeURIComponent(normalizeUpstreamUrl(url));
-}
-
-function isAlreadyProxied(url) {
-  if (!url) return false;
-  if (/^\/proxy\//i.test(url)) return true;
-  try {
-    const u = new URL(url, window.location.origin);
-    return u.origin === window.location.origin && /^\/proxy\//i.test(u.pathname);
-  } catch (_) {
-    return false;
-  }
-}
-
-function shouldProxy(url) {
-  if (!url || !/^https?:\/\//i.test(url)) return false;
-  if (isAlreadyProxied(url)) return false;
-  return true;
-}
+import {
+  unwrapCdnProxyUrl, normalizeUpstreamUrl, proxyUrl,
+  isAlreadyProxied, shouldProxy,
+} from './utils/hls-url.js';
 
 const HLS_TIMEOUTS = {
   // CDN + local proxy can be slow; defaults (10s/20s) surface as timeout errors.
@@ -85,18 +22,55 @@ const HLS_TIMEOUTS = {
 };
 
 function logPlayer(...args) {
-  // Always visible in DevTools when diagnosing playback failures.
   console.error('[VideoPlayer]', ...args);
 }
 
+// ---------- 播放器 UI 状态机 ----------
+// 统一管理 phase / errorMsg / loadingTip / showSlowHint，替代散落的 useState + ref
+const initialState = {
+  phase: 'loading',       // idle | loading | ready | error | none
+  errorMsg: '',
+  loadingTip: '正在准备播放…',
+  showSlowHint: false,
+};
+
+function playerReducer(state, action) {
+  switch (action.type) {
+    case 'INIT':
+      return { ...state, phase: action.phase || 'loading', errorMsg: '', showSlowHint: false };
+    case 'START_LOADING':
+      return { ...state, phase: 'loading', errorMsg: '', showSlowHint: false, loadingTip: action.tip || '正在加载视频流…' };
+    case 'SET_PHASE':
+      return { ...state, phase: action.phase };
+    case 'SET_ERROR':
+      return { ...state, phase: 'error', errorMsg: action.msg || '', showSlowHint: false };
+    case 'SET_TIP':
+      return { ...state, loadingTip: action.tip };
+    case 'SHOW_SLOW':
+      return { ...state, showSlowHint: true };
+    case 'HIDE_SLOW':
+      return { ...state, showSlowHint: false };
+    default:
+      return state;
+  }
+}
+
+// ---------- 播放进度记忆 ----------
+const PROGRESS_KEY = (id) => `vp-progress:${id}`;
+const PROGRESS_SAVE_INTERVAL = 5000; // 5s 防抖
+
+function saveProgress(id, time) {
+  if (time > 5) {
+    try { localStorage.setItem(PROGRESS_KEY(id), String(time)); } catch (_) {}
+  }
+}
+
+function loadProgress(id) {
+  try { return parseFloat(localStorage.getItem(PROGRESS_KEY(id)) || '0'); }
+  catch (_) { return 0; }
+}
+
 // Custom HLS.js loader: routes cross-origin CDN requests through the CORS proxy.
-//
-// Do NOT proxy URLs that are already /proxy/... (playlist rewrite + absolute
-// resolution to http://localhost/proxy/...). Double-wrapping breaks keys/segments
-// and shows up as load timeout / cannot decode.
-//
-// After a proxied fetch, restore response.url to the original CDN URL so any
-// remaining relative URIs still resolve against the CDN base.
 const ProxyLoader = (() => {
   const Base = Hls.DefaultConfig.loader;
   return class extends Base {
@@ -262,12 +236,15 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
   const onTagsRef = useRef(onTags);
   const loadGenRef = useRef(0);
   const loadingTimerRef = useRef(null);
+  const lastSaveRef = useRef(0);
 
-  const [phase, setPhaseState] = useState(defer ? 'idle' : 'loading');
-  const phaseRef = useRef(defer ? 'idle' : 'loading');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [loadingTip, setLoadingTip] = useState('正在准备播放…');
-  const [showSlowHint, setShowSlowHint] = useState(false);
+  // useReducer 统一管理 UI 状态（替代散落的 useState + phaseRef）
+  const [uiState, dispatch] = useReducer(playerReducer, {
+    ...initialState,
+    phase: defer ? 'idle' : 'loading',
+  });
+  const phaseRef = useRef(uiState.phase);
+  phaseRef.current = uiState.phase;
 
   const activeVideo = videoProp || (item && item.video) || null;
   const activeVideoRef = useRef(activeVideo);
@@ -277,8 +254,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
   onTagsRef.current = onTags;
 
   const setPhase = useCallback((p) => {
-    phaseRef.current = p;
-    setPhaseState(p);
+    dispatch({ type: 'SET_PHASE', phase: p });
   }, []);
 
   const loadSource = useCallback(async () => {
@@ -293,15 +269,13 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       arr.forEach((t) => clearTimeout(t));
       loadingTimerRef.current = null;
     }
-    setShowSlowHint(false);
+    dispatch({ type: 'HIDE_SLOW' });
 
-    setPhase('loading');
-    setErrorMsg('');
-    setLoadingTip('正在加载视频流…');
+    dispatch({ type: 'START_LOADING' });
 
     let currentUrl = activeVideoRef.current && activeVideoRef.current.url;
     if (!currentUrl) {
-      setPhase('none');
+      dispatch({ type: 'SET_PHASE', phase: 'none' });
       return;
     }
 
@@ -318,7 +292,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
         arr.forEach((t) => clearTimeout(t));
         loadingTimerRef.current = null;
       }
-      if (gen === loadGenRef.current) setShowSlowHint(false);
+      if (gen === loadGenRef.current) dispatch({ type: 'HIDE_SLOW' });
     };
 
     const startWatchdog = () => {
@@ -330,7 +304,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       timers.push(setTimeout(() => {
         if (gen !== loadGenRef.current) return;
         if (phaseRef.current !== 'loading') return;
-        setShowSlowHint(true);
+        dispatch({ type: 'SHOW_SLOW' });
         logPlayer('loading slow hint', { id: item.id, elapsed: '12s' });
       }, 12000));
 
@@ -341,22 +315,20 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
         if (!refreshDoneRef.current) {
           // 刷新仍在进行，再等 15s
-          setLoadingTip('刷新较慢，正在等待刷新结果…');
+          dispatch({ type: 'SET_TIP', tip: '刷新较慢，正在等待刷新结果…' });
           timers.push(setTimeout(() => {
             if (gen !== loadGenRef.current) return;
             if (phaseRef.current !== 'loading') return;
             logPlayer('loading hard timeout (after refresh wait)', { id: item.id });
             clearWatchdog();
-            setErrorMsg('视频加载超时，请检查网络后点击刷新重试');
-            setPhase('error');
+            dispatch({ type: 'SET_ERROR', msg: '视频加载超时，请检查网络后点击刷新重试' });
           }, 15000));
           return;
         }
 
         logPlayer('loading hard timeout', { id: item.id });
         clearWatchdog();
-        setErrorMsg('视频加载超时，请检查网络后点击刷新重试');
-        setPhase('error');
+        dispatch({ type: 'SET_ERROR', msg: '视频加载超时，请检查网络后点击刷新重试' });
       }, 25000));
     };
 
@@ -366,6 +338,11 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
       // 销毁旧实例（含 HLS）
       if (artRef.current) {
+        // 保存旧播放器的进度
+        try {
+          const t = artRef.current.currentTime;
+          saveProgress(item.id, t);
+        } catch (_) {}
         try {
           if (artRef.current.hls) artRef.current.hls.destroy();
           artRef.current.destroy(false);
@@ -388,6 +365,14 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
           onReady: () => {
             if (gen !== loadGenRef.current) return;
             clearWatchdog();
+
+            // 恢复上次播放进度
+            const saved = loadProgress(item.id);
+            if (saved > 5 && art.duration && saved < art.duration - 5) {
+              try { art.currentTime = saved; } catch (_) {}
+              logPlayer('restored progress', { id: item.id, time: saved });
+            }
+
             setPhase('ready');
             if (!autoplay && !isFallback) return;
             try {
@@ -402,26 +387,33 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
             if (!refreshDoneRef.current) {
               // 刷新尚未完成：可能是地址过期，回到 loading 等待刷新结果
-              setLoadingTip('正在刷新播放地址…');
-              setPhase('loading');
+              dispatch({ type: 'SET_TIP', tip: '正在刷新播放地址…' });
+              dispatch({ type: 'SET_PHASE', phase: 'loading' });
               // 看门狗继续运行，会在 25s 后强制超时
             } else {
               // 刷新已完成但仍报错 → 直接显示错误 + 刷新按钮
               clearWatchdog();
-              setErrorMsg(msg || '播放失败');
-              setPhase('error');
+              dispatch({ type: 'SET_ERROR', msg: msg || '播放失败' });
             }
           },
         });
         artRef.current = art;
+
+        // 播放进度记忆：timeupdate 事件防抖保存
+        art.on('video:timeupdate', () => {
+          const now = Date.now();
+          if (now - lastSaveRef.current < PROGRESS_SAVE_INTERVAL) return;
+          lastSaveRef.current = now;
+          try { saveProgress(item.id, art.currentTime); } catch (_) {}
+        });
+
         // 启动本轮加载看门狗
         startWatchdog();
       } catch (e) {
         logPlayer('artplayer init failed', e);
         if (gen !== loadGenRef.current) return;
         clearWatchdog();
-        setErrorMsg('播放器初始化失败');
-        setPhase('error');
+        dispatch({ type: 'SET_ERROR', msg: '播放器初始化失败' });
       }
     };
 
@@ -459,8 +451,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
         // 刷新失败且播放器已死（仍在 loading）→ 显示错误
         if (phaseRef.current === 'loading' && !playerAliveRef.current) {
           clearWatchdog();
-          setErrorMsg(data && data.error ? data.error : '刷新播放地址失败，请重试');
-          setPhase('error');
+          dispatch({ type: 'SET_ERROR', msg: data && data.error ? data.error : '刷新播放地址失败，请重试' });
         }
         // 播放器仍存活 → 让看门狗自行处理（25s 后超时或正常就绪）
         return;
@@ -494,9 +485,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
             new: matched.url && matched.url.slice(0, 80),
           });
           currentUrl = matched.url;
-          setErrorMsg('');
-          setLoadingTip('正在加载视频流…');
-          setPhase('loading');
+          dispatch({ type: 'START_LOADING' });
           createPlayer(matched.url, true);
         }
         // 播放器已就绪 → 不打扰，仅更新元数据
@@ -504,8 +493,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
         // 地址没变但播放器已死（HLS 报错后回退到 loading）→ 用刷新后的地址重启
         if (matched && matched.url) currentUrl = matched.url;
         logPlayer('refresh done, same URL, restarting dead player', { id: item.id });
-        setErrorMsg('');
-        setLoadingTip('正在加载视频流…');
+        dispatch({ type: 'START_LOADING' });
         createPlayer(currentUrl, true);
       }
       // 地址没变且播放器仍存活 → 正常等待 HLS 自行加载完成
@@ -528,6 +516,10 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       arr.forEach((t) => clearTimeout(t));
       loadingTimerRef.current = null;
     }
+    // 销毁前保存播放进度
+    if (artRef.current) {
+      try { saveProgress(item.id, artRef.current.currentTime); } catch (_) {}
+    }
     if (artRef.current) {
       try {
         if (artRef.current.hls) artRef.current.hls.destroy();
@@ -541,9 +533,11 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
   const retry = useCallback(() => { loadSource(); }, [loadSource]);
   const startDeferred = useCallback(() => {
-    if (phase !== 'idle') return;
+    if (uiState.phase !== 'idle') return;
     loadSource();
-  }, [phase, loadSource]);
+  }, [uiState.phase, loadSource]);
+
+  const { phase, errorMsg, loadingTip, showSlowHint } = uiState;
 
   return (
     <div className="relative bg-black w-full">

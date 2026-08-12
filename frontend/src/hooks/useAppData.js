@@ -1,11 +1,16 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  fetchVideos, fetchFavorites, addFavorite, removeFavorite, fetchSites, fetchTags,
+  fetchVideos, fetchFavorites, addFavorite, removeFavorite, clearAllFavoritesAPI,
+  fetchSites, fetchTags,
 } from '../services/api.js';
 
 // 视频 / 收藏 / 站点 / 标签数据 hook
 
 export function useAppData(message) {
+  // 用 ref 存 message，避免 message 引用变化导致 useCallback 重建 → 触发不必要的 useEffect
+  const messageRef = useRef(message);
+  messageRef.current = message;
+
   const [items, setItems] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [favIds, setFavIds] = useState(() => new Set());
@@ -40,11 +45,12 @@ export function useAppData(message) {
       loadTags();
     } catch (e) {
       if (e && e.name === 'AbortError') return;
-      if (message) message.error('加载失败：' + e.message);
+      const msg = messageRef.current;
+      if (msg) msg.error('加载失败：' + e.message);
     } finally {
       if (!silent) setLoadingList(false);
     }
-  }, [message, loadTags]);
+  }, [loadTags]);
 
   const loadFavorites = useCallback(async () => {
     try {
@@ -68,7 +74,8 @@ export function useAppData(message) {
           return next;
         });
         setFavorites((prev) => prev.filter((a) => a.id !== item.id));
-        if (message) message.success('已取消收藏');
+        const msg = messageRef.current;
+        if (msg) msg.success('已取消收藏');
       } else {
         const data = await addFavorite(item);
         if (data.error) throw new Error(data.error);
@@ -79,22 +86,24 @@ export function useAppData(message) {
             return [data.item, ...prev];
           });
         }
-        if (message) message.success('已加入收藏');
+        const msg = messageRef.current;
+        if (msg) msg.success('已加入收藏');
       }
     } catch (e) {
-      if (message) message.error(e.message);
+      const msg = messageRef.current;
+      if (msg) msg.error(e.message);
     }
-  }, [favIds, message]);
+  }, [favIds]);
 
   const clearAllFavorites = useCallback(async () => {
-    const ids = Array.from(favIds);
-    for (const id of ids) {
-      try { await removeFavorite(id); } catch (_) { /* 忽略单条失败 */ }
-    }
+    try {
+      await clearAllFavoritesAPI();
+    } catch (_) { /* 即使 API 失败也清空前端状态 */ }
     setFavorites([]);
     setFavIds(new Set());
-    if (message) message.success('已清空收藏');
-  }, [favIds, message]);
+    const msg = messageRef.current;
+    if (msg) msg.success('已清空收藏');
+  }, []);
 
   useEffect(() => {
     loadVideos('');
