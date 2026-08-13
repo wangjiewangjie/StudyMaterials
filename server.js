@@ -10,7 +10,7 @@ const os = require('os');
 const axios = require('axios');
 const { EventEmitter } = require('events');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
-  loadSiteConfigs, saveSiteConfigs, reloadSites, getSiteConfigs, getSites, getBaseUrl,
+  loadSiteConfigs, getSiteConfigs, getSites, getBaseUrl,
   estimateCrawlTime } = require('./crawler');
 const { decryptBuffer, resetDecrypt, ensureDecryptReady } = require('./image-decrypt');
 const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
@@ -396,34 +396,6 @@ app.get('/api/sites', (req, res) => {
   res.json({ sites: getSiteConfigs() });
 });
 
-app.post('/api/sites', (req, res) => {
-  const sites = req.body && req.body.sites;
-  if (!Array.isArray(sites)) return res.status(400).json({ error: '需要站点数组' });
-  // 规范化：去空白、补默认值、去重 url（保留首个）
-  const seen = new Set();
-  const clean = [];
-  for (const s of sites) {
-    if (!s || typeof s !== 'object') continue;
-    const url = String(s.url || '').trim().replace(/\/+$/, '');
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    clean.push({
-      url,
-      name: String(s.name || '').trim() || url,
-      todayPath: String(s.todayPath || '').trim(),
-      enabled: s.enabled !== false,
-    });
-  }
-  if (clean.length === 0) return res.status(400).json({ error: '至少需要一个站点' });
-  try {
-    saveSiteConfigs(clean);
-    reloadSites();
-    res.json({ ok: true, sites: getSiteConfigs() });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 /** 可播放且未命中排除词的视频 */
 function getPlayableVideos() {
   return filterExcludedArticles(getIndex().filter((a) => a.video && a.video.url));
@@ -744,21 +716,10 @@ app.get('/api/favorites', (req, res) => {
   res.json({ total: items.length, items, ids: items.map((a) => a.id) });
 });
 
-// 下载收藏（json / txt / m3u8）
+// 下载收藏（json）
 app.get('/api/favorites/download', (req, res) => {
   const favs = getFavorites();
-  const format = String(req.query.format || 'json').toLowerCase();
   const stamp = new Date().toISOString().slice(0, 10);
-  if (format === 'm3u8' || format === 'txt') {
-    const lines = favs.map((a) => {
-      const title = (a.title || a.id || '').replace(/\r?\n/g, ' ');
-      const url = (a.video && a.video.url) || '';
-      return `# ${title}\n${url}`;
-    }).join('\n\n');
-    res.set('Content-Type', 'text/plain; charset=utf-8');
-    res.set('Content-Disposition', `attachment; filename="favorites-${stamp}.txt"`);
-    return res.send(lines || '# empty\n');
-  }
   res.set('Content-Type', 'application/json; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="favorites-${stamp}.json"`);
   res.send(JSON.stringify(favs, null, 2));
@@ -824,36 +785,6 @@ app.get('/api/sync-events', (req, res) => {
 });
 
 // 在线搜索并入库
-app.post('/api/search-online', async (req, res) => {
-  const keyword = (req.body && req.body.keyword) || '';
-  if (!keyword) return res.status(400).json({ error: '需要关键词' });
-  const searchPages = parseInt(req.body && req.body.pages, 10) || 1;
-  const logs = [];
-  try {
-    const result = await crawl({
-      search: keyword,
-      searchPages,
-      outDir: OUT_DIR,
-      jsonPath: JSON_PATH,
-      concurrency: 15,
-      pushEvery: 5,
-      onBatch: () => { onIndexChanged(); },
-      onLog: (m) => logs.push(m),
-    });
-    // 爬虫已重写 index.json；清除 mtime 缓存使 getIndex 重新加载
-    onIndexChanged();
-    const all = getPlayableVideos();
-    const qlc = keyword.toLowerCase();
-    const items = all
-      .filter((a) => (a.title || '').toLowerCase().includes(qlc) || (a.id || '').includes(qlc))
-      .slice(0, 100)
-      .map(toVideoItem);
-    res.json({ ok: true, added: result.added, total: result.total, matched: items.length, items, logs });
-  } catch (err) {
-    res.status(500).json({ error: err.message, logs });
-  }
-});
-
 // 多标签顺序同步
 app.post('/api/sync-tags', async (req, res) => {
   const tags = (req.body && req.body.tags) || [];
