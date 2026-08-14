@@ -12,8 +12,8 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 const { matchesExclude, filterExcluded } = require('./lib/exclude');
-const { estimateCrawl, startConsoleCountdown, formatDuration } = require('./lib/crawl-eta');
 const { isPromoDetailText } = require('./lib/detail-noise');
+const { writeFailureReport, setFailureLogPath } = require('./lib/crawl-failure-log');
 
 // 站点项：{ url, name, todayPath, enabled, archiveSuffix? }；archiveSuffix 默认 "/"，部分站用 ".html"
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
@@ -34,11 +34,6 @@ function loadSiteConfigs() {
     if (Array.isArray(arr) && arr.length) return arr;
   } catch (_) { /* 回退到默认配置 */ }
   return DEFAULT_SITE_CONFIGS.map((s) => ({ ...s }));
-}
-
-function saveSiteConfigs(configs) {
-  fs.mkdirSync(path.dirname(SITES_PATH), { recursive: true });
-  fs.writeFileSync(SITES_PATH, JSON.stringify(configs, null, 2), 'utf8');
 }
 
 // 模块级缓存；reloadSites() 后下次调用自动用新配置
@@ -146,6 +141,44 @@ function headersFor(site) {
   return { Referer: site + '/', Origin: site };
 }
 
+/**
+ * 把 axios / Node 网络错误整理成可读文案。
+ * Node 在双栈连接失败时会抛 AggregateError(ETIMEDOUT)，message 经常是空字符串，
+ * 直接拼到日志里会变成「第 1 页: 」这种空白告警。
+ */
+function formatRequestError(err) {
+  if (!err) return '未知错误';
+  const status = err.response && err.response.status;
+  const code = err.code || (err.cause && err.cause.code) || '';
+  const msg = String(err.message || '').trim();
+
+  // Cloudflare 源站类错误：浏览器能开 Cloudflare 页，但回源失败
+  if (status === 522) return 'HTTP 522（Cloudflare 无法连接源站，源站超时/宕机）';
+  if (status === 521) return 'HTTP 521（Cloudflare 显示源站拒绝连接）';
+  if (status === 523) return 'HTTP 523（Cloudflare 无法到达源站）';
+  if (status === 524) return 'HTTP 524（Cloudflare 等待源站响应超时）';
+  if (status) return msg || `HTTP ${status}`;
+
+  if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT') {
+    return msg || '连接超时（ETIMEDOUT，常见于并发过高或线路不稳）';
+  }
+  if (code === 'ECONNABORTED') return msg || '请求被中止/超时（ECONNABORTED）';
+  if (code === 'ECONNRESET') return msg || '连接被重置（ECONNRESET）';
+  if (code === 'ENOTFOUND') return msg || 'DNS 解析失败（ENOTFOUND）';
+  if (code === 'ECONNREFUSED') return msg || '连接被拒绝（ECONNREFUSED）';
+
+  if (err.name === 'AggregateError') {
+    return msg || (code ? `连接失败（${code}）` : '连接失败（AggregateError）');
+  }
+  return msg || code || err.name || '未知错误';
+}
+
+/** Cloudflare 源站故障：重试几乎无效，应立即失败以免拖垮整次同步 */
+function isCloudflareOriginDown(err) {
+  const status = err && err.response && err.response.status;
+  return status === 521 || status === 522 || status === 523;
+}
+
 async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders = {}) {
   let lastErr;
   for (let i = 0; i < retries; i++) {
@@ -154,8 +187,9 @@ async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders 
     } catch (err) {
       lastErr = err;
       const code = err.response && err.response.status;
-      // 4xx（除 429 外）不可重试，直接抛出
+      // 4xx（除 429 外）与 Cloudflare 源站故障不可重试
       if (code && code >= 400 && code < 500 && code !== 429) throw err;
+      if (isCloudflareOriginDown(err)) throw err;
       await sleep(500 * Math.pow(2, i) + Math.floor(Math.random() * 200));
     }
   }
@@ -196,6 +230,55 @@ class SiteCircuitBreaker {
   }
 }
 const siteBreaker = new SiteCircuitBreaker();
+
+// 站点失效时向控制台输出黄色告警，并记入本轮失败列表（结束时写入 crawl-failures.json）
+let gFailures = null;
+let gFailureScope = 'crawl';
+
+function beginFailureSession(scope) {
+  gFailures = [];
+  gFailureScope = scope || 'crawl';
+}
+
+function warnSiteFailure(site, msg, extra) {
+  console.warn(`\x1b[33m[站点失效] ${site}: ${msg}\x1b[0m`);
+  if (!gFailures) return;
+  const name = (getSiteConfigs().find((s) => s.url === site) || {}).name || '';
+  gFailures.push({
+    ts: new Date().toISOString(),
+    site,
+    name: name || undefined,
+    error: String(msg || ''),
+    ...(extra || {}),
+  });
+}
+
+function flushFailureReport(opts) {
+  const o = opts || {};
+  const sites = (gFailures || []).slice();
+  gFailures = null;
+  try {
+    const file = writeFailureReport({
+      scope: o.scope || gFailureScope,
+      fatal: o.fatal || null,
+      elapsedMs: o.elapsedMs,
+      sites,
+      meta: o.meta,
+    });
+    if (file) console.warn(`\x1b[33m[失败日志] 已写入 ${file}\x1b[0m`);
+    return file;
+  } catch (e) {
+    console.warn('[失败日志] 写入失败:', e.message);
+    return null;
+  }
+}
+
+function formatElapsedSec(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, '0')}`;
+}
 
 function parsePagesArg(arg) {
   if (!arg) return [1, 1];
@@ -573,7 +656,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
       return null;
     } catch (err) {
       const code = err.code || (err.response && err.response.status) || '';
-      log(`  [播放器] 解析错误 (${code} ${err.message}). ${fullUrl}`);
+      log(`  [播放器] 解析错误 (${code} ${formatRequestError(err)}). ${fullUrl}`);
       if (attempt === 0) { await sleep(800); continue; }
       return null;
     }
@@ -642,11 +725,6 @@ function saveIndex(jsonPath, articles) {
   });
 }
 
-function bustIndexCache() {
-  _indexCache = null;
-  _indexCachePath = null;
-}
-
 /** 合并进索引：新/更新条目置顶，按 id 去重，旧条目保留 */
 function mergeIntoIndex(existing, incoming) {
   const existingMap = new Map(existing.map((a) => [a.id, a]));
@@ -691,7 +769,12 @@ async function mapAllSites(taskFn, log) {
       return result;
     } catch (err) {
       const newlyTripped = siteBreaker.recordFailure(site);
-      if (newlyTripped) log(`  [${site}] 断路器已熔断（连续失败）`);
+      if (newlyTripped) {
+        log(`  [${site}] 断路器已熔断（连续失败）`);
+        warnSiteFailure(site, `连续失败达阈值，已熔断跳过（${formatRequestError(err)}）`);
+      } else {
+        warnSiteFailure(site, formatRequestError(err));
+      }
       throw err;
     }
   }));
@@ -703,7 +786,7 @@ async function mapAllSites(taskFn, log) {
       const arts = Array.isArray(r.value) ? r.value : (r.value && r.value.articles) || [];
       for (const a of arts) aggregated.push(a);
     } else {
-      log(`  [${activeSites[i]}] 失败: ${r.reason && r.reason.message}`);
+      log(`  [${activeSites[i]}] 失败: ${formatRequestError(r.reason)}`);
     }
   }
   return dedupeById(aggregated);
@@ -748,7 +831,7 @@ async function fetchTodayPerSiteWithFallback(log) {
         if (r.status === 'fulfilled') {
           parseListPage(r.value.data, site).forEach(add);
         } else {
-          if (todayUrls[i].pg === 1) log(`  [今日 ${site}] 失败: ${r.reason && r.reason.message}`);
+          if (todayUrls[i].pg === 1) log(`  [今日 ${site}] 失败: ${formatRequestError(r.reason)}`);
         }
       }
     }
@@ -761,19 +844,21 @@ async function fetchTodayPerSiteWithFallback(log) {
         parseListPage(res.data, site).forEach(add);
         log(`  [回退 ${site}] -> ${articles.length} 条`);
       } catch (err) {
-        log(`  [回退 ${site}] 失败: ${err.message}`);
+        log(`  [回退 ${site}] 失败: ${formatRequestError(err)}`);
       }
     } else {
       log(`  [今日 ${site}] -> ${articles.length} 条`);
     }
-
     articles.forEach((a) => { a._listSource = source; });
     return articles;
   }, log);
 }
 
 /** 按站翻页直到凑满 minArticles；无新增或 404 则标记耗尽 */
-async function fetchMinPerSite(minArticles, log, maxPages = 10) {
+/** 按站翻页直到凑满 minArticles；无新增或 404 则标记耗尽。
+ *  pageUrl(site, pageNum) 可注入搜索 URL，从而支持关键词每站 N 条。 */
+async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null) {
+  const buildUrl = pageUrl || ((site, p) => listPageUrl(site, p));
   const siteArticles = {};
   const siteIds = {};
   const exhaustedSites = new Set();
@@ -791,7 +876,7 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
         if (siteIds[site].size >= minArticles) return { site, met: true };
         log(`[每站最低] ${site} 第 ${pageNum} 页`);
         try {
-          const res = await getWithRetry(listPageUrl(site, pageNum), client, 3, headersFor(site));
+          const res = await getWithRetry(buildUrl(site, pageNum), client, 3, headersFor(site));
           siteBreaker.recordSuccess(site);
           const arts = parseListPage(res.data, site);
           let newCount = 0;
@@ -813,7 +898,12 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10) {
             log(`  [${site}] 第 ${pageNum} 页 -> 404，站点已耗尽`);
           } else {
             const newlyTripped = siteBreaker.recordFailure(site);
-            log(`  [${site}] 第 ${pageNum} 页失败: ${err.message}${newlyTripped ? '（断路器已熔断）' : ''}`);
+            log(`  [${site}] 第 ${pageNum} 页失败: ${formatRequestError(err)}${newlyTripped ? '（断路器已熔断）' : ''}`);
+            if (newlyTripped) {
+              warnSiteFailure(site, `连续失败达阈值，已熔断跳过（${formatRequestError(err)}）`);
+            } else {
+              warnSiteFailure(site, `第 ${pageNum} 页: ${formatRequestError(err)}`);
+            }
           }
           return { site, exhausted: true };
         }
@@ -895,6 +985,7 @@ async function crawl(opts = {}) {
   const concurrency = opts.concurrency || 15;
   const pushEvery = Math.max(1, parseInt(opts.pushEvery, 10) || 10);
   const onBatch = typeof opts.onBatch === 'function' ? opts.onBatch : null;
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
   const jsonPath = path.resolve(opts.jsonPath || path.join(outDir, 'index.json'));
   const log = typeof opts.onLog === 'function' ? opts.onLog : (m) => console.log(m);
 
@@ -902,9 +993,15 @@ async function crawl(opts = {}) {
 
   // 每次抓取前重新加载站点配置，确保页面修改后立即生效。
   reloadSites();
+  beginFailureSession(opts.failureScope || 'crawl');
+  const crawlStartedAt = Date.now();
+  let crawlDetailsTotal = 0;
 
   const mode = searchKeyword
-    ? { type: 'search', keyword: searchKeyword, label: `search "${searchKeyword}" pages 1..${searchPages}` }
+    ? { type: 'search', keyword: searchKeyword,
+        label: minPerSite > 0
+          ? `search "${searchKeyword}" 每站至少 ${minPerSite} 条`
+          : `search "${searchKeyword}" pages 1..${searchPages}` }
     : minPerSite > 0
       ? { type: 'list', label: `min ${minPerSite} per site` }
       : todayOnly
@@ -912,36 +1009,36 @@ async function crawl(opts = {}) {
         : { type: 'list', label: `pages ${pageStart}..${pageEnd}` };
   log(`=== crawler start | ${mode.label} | ${SITES.length} sites | concurrency=${concurrency} ===`);
 
-  const eta = estimateCrawl({
-    siteCount: SITES.length,
-    concurrency,
-    minPerSite,
-    pageStart,
-    pageEnd,
-    search: searchKeyword,
-    searchPages,
-    todayOnly,
-  });
-  log(`预计耗时约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条 · ${eta.modeLabel}`);
-
   const newArticles = [];
   const collectedIds = new Set();
   const addUnique = (a) => {
     if (!collectedIds.has(a.id)) { collectedIds.add(a.id); newArticles.push(a); }
   };
 
-  if (mode.type === 'list') {
-    if (minPerSite > 0) {
-      log(`--- 每站抓取最低 ${minPerSite} 条 ---`);
-      const minArts = await fetchMinPerSite(minPerSite, log);
-      for (const a of minArts) addUnique(a);
-      log(`每站最低: 共 ${minArts.length} 条`);
+  // 每站最低 N 条：list（首页/启动/标签）与 search（关键词）通用
+  if (minPerSite > 0) {
+    const isSearch = !!searchKeyword;
+    log(`--- 每站抓取最低 ${minPerSite} 条${isSearch ? `（关键词「${searchKeyword}」）` : ''} ---`);
+    const pageUrl = isSearch
+      ? (site, p) => searchUrl(site, searchKeyword, p)
+      : (site, p) => listPageUrl(site, p);
+    const minArts = await fetchMinPerSite(minPerSite, log, 10, pageUrl);
+    if (isSearch) {
+      // 关键词结果置顶：逆序 unshift，既放到最前面又保持原顺序（先抓到的排前）
+      for (let j = minArts.length - 1; j >= 0; j--) {
+        const a = minArts[j];
+        if (!collectedIds.has(a.id)) { collectedIds.add(a.id); newArticles.unshift(a); }
+      }
     } else {
-      log('--- 抓取今日（每站，空则回退）---');
-      const todayArts = await fetchTodayPerSiteWithFallback(log);
-      for (const a of todayArts) addUnique(a);
-      log(`今日+回退: 共 ${todayArts.length} 条`);
+      for (const a of minArts) addUnique(a);
     }
+    log(`每站最低: 共 ${minArts.length} 条`);
+  } else if (!searchKeyword) {
+    // 今日（每站，空则回退）——仅 list 模式、非关键词
+    log('--- 抓取今日（每站，空则回退）---');
+    const todayArts = await fetchTodayPerSiteWithFallback(log);
+    for (const a of todayArts) addUnique(a);
+    log(`今日+回退: 共 ${todayArts.length} 条`);
   }
 
   if (!todayOnly && minPerSite === 0) {
@@ -949,7 +1046,15 @@ async function crawl(opts = {}) {
     for (let i = 0; i < totalPages; i++) {
       const pageNum = searchKeyword ? (searchPageStart + i) : (pageStart + i);
       const arts = await fetchListPageFromAllSites(pageNum, log, mode);
-      for (const a of arts) addUnique(a);
+      if (searchKeyword) {
+        // 关键词结果置顶：逆序 unshift，既放到最前面又保持原顺序（先抓到的排前）
+        for (let j = arts.length - 1; j >= 0; j--) {
+          const a = arts[j];
+          if (!collectedIds.has(a.id)) { collectedIds.add(a.id); newArticles.unshift(a); }
+        }
+      } else {
+        for (const a of arts) addUnique(a);
+      }
       if (i < totalPages - 1) await sleep(50);
     }
   }
@@ -968,6 +1073,7 @@ async function crawl(opts = {}) {
     // （如所有站点暂时不可达或标题全部被排除）
     const existing = loadIndex(jsonPath);
     log('无文章可抓取，无需操作。');
+    flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { crawled: 0 } });
     return { added: 0, total: existing.length, crawled: 0 };
   }
 
@@ -995,6 +1101,11 @@ async function crawl(opts = {}) {
       incrementalAdded += added;
       flushedCount += snapshot.length;
       log(`  [push] 写入 ${snapshot.length} 条（累计 ${flushedCount}），索引共 ${merged.length} 条（+${added}）`);
+      if (onProgress) {
+        const detailsDone = flushedCount;
+        const detailsTotal = crawlDetailsTotal || newArticles.length;
+        onProgress({ phase: 'detail', detailsDone, detailsTotal, flushed: flushedCount, total: merged.length });
+      }
       if (onBatch) {
         try {
           await onBatch({
@@ -1016,6 +1127,7 @@ async function crawl(opts = {}) {
     return flushBatch(batch);
   };
 
+  crawlDetailsTotal = newArticles.length;
   await mapWithConcurrency(newArticles, concurrency, async (a) => {
     try {
       const res = await getWithRetry(a.url, client, 3, headersFor(a.siteUrl));
@@ -1042,7 +1154,7 @@ async function crawl(opts = {}) {
 
       log(`  [详情] ${a.id} ${resolvedVideos.length} 个视频 | 图片 ${(a.images || []).length} 张 | ${(a.title || '').slice(0, 40)}`);
     } catch (err) {
-      log(`  [详情] ${a.id} 失败: ${err.message}`);
+      log(`  [详情] ${a.id} 失败: ${formatRequestError(err)}`);
     }
 
     // 详情后按排除规则决定是否入库；命中则跳过推送
@@ -1072,6 +1184,7 @@ async function crawl(opts = {}) {
   if (newArticles.length === 0) {
     const existing = loadIndex(jsonPath);
     log('过滤后无剩余文章，保留现有索引。');
+    flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { crawled: 0 } });
     return { added: 0, total: existing.length, updated: 0, crawled: 0 };
   }
 
@@ -1083,6 +1196,7 @@ async function crawl(opts = {}) {
     }
     const withVideo = newArticles.filter((a) => a.video && a.video.url).length;
     log(`完成（替换模式）。共 ${newArticles.length} 条 | ${withVideo} 条含视频地址 | 分批已推 ${flushedCount}`);
+    flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { added: newArticles.length, total: newArticles.length } });
     return { added: newArticles.length, total: newArticles.length, updated: 0, crawled: newArticles.length };
   }
 
@@ -1096,6 +1210,7 @@ async function crawl(opts = {}) {
   }
   const withVideo = merged.filter((a) => a.video && a.video.url).length;
   log(`完成（合并模式）。+${added} 新增, ~${updated} 更新 | 共 ${merged.length} 条 | ${withVideo} 条含视频地址 | 分批已推 ${flushedCount}（增量 +${incrementalAdded}）`);
+  flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { added, total: merged.length, updated } });
   return { added, total: merged.length, updated, crawled: newArticles.length };
 }
 
@@ -1120,24 +1235,23 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.benchmark) {
+    console.warn('已移除 --benchmark 预估探测；仅保留实际爬取计时。');
+    return;
+  }
   const [pageStart, pageEnd] = parsePagesArg(args.pages);
   const searchPages = parseInt(args['search-pages'], 10) || 1;
   const concurrency = parseInt(args.concurrency, 10) || 15;
   const todayOnly = !!args['today-only'];
+  const outDir = args.out || './output';
+  setFailureLogPath(path.resolve(outDir, 'crawl-failures.json'));
 
   reloadSites();
-  const eta = estimateCrawl({
-    siteCount: SITES.length,
-    concurrency,
-    pageStart,
-    pageEnd,
-    search: args.search || null,
-    searchPages,
-    todayOnly,
-  });
-  console.log(`预计爬取约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条`);
-  const stopCountdown = startConsoleCountdown(eta.estimateSec, '爬取进行中…');
   const t0 = Date.now();
+  const timer = setInterval(() => {
+    process.stdout.write(`\r爬取进行中… 已运行 ${formatElapsedSec((Date.now() - t0) / 1000)}   `);
+  }, 1000);
+  if (typeof timer.unref === 'function') timer.unref();
   try {
     await crawl({
       pageStart,
@@ -1147,13 +1261,21 @@ async function main() {
       todayOnly,
       replace: !!args.replace || todayOnly,
       limit: parseInt(args.limit, 10) || 0,
-      outDir: args.out || './output',
+      outDir,
       concurrency,
       jsonPath: args['save-json'] || './output/index.json',
+      failureScope: 'cli',
     });
+  } catch (err) {
+    flushFailureReport({
+      fatal: formatRequestError(err),
+      elapsedMs: Date.now() - t0,
+    });
+    throw err;
   } finally {
-    stopCountdown();
-    console.log(`实际耗时 ${formatDuration((Date.now() - t0) / 1000)}`);
+    clearInterval(timer);
+    process.stdout.write('\n');
+    console.log(`实际耗时 ${formatElapsedSec((Date.now() - t0) / 1000)}`);
   }
 }
 
@@ -1165,24 +1287,8 @@ if (require.main === module) {
 }
 
 module.exports = {
-  crawl, parseDetailPage, resolvePlayerUrl, loadIndex, mergeIntoIndex,
-  estimateCrawlTime,
-  SITES, UA,
-  loadSiteConfigs, saveSiteConfigs, reloadSites,
+  crawl, parseDetailPage, resolvePlayerUrl, loadIndex,
+  UA,
   getSiteConfigs, getSites, getBaseUrl,
+  setFailureLogPath, flushFailureReport, formatRequestError,
 };
-
-/** 对外预估：自动带上当前启用站点数 */
-function estimateCrawlTime(opts = {}) {
-  reloadSites();
-  return estimateCrawl({
-    siteCount: SITES.length,
-    concurrency: opts.concurrency || 15,
-    minPerSite: opts.minPerSite || 0,
-    pageStart: opts.pageStart || 1,
-    pageEnd: opts.pageEnd || opts.pageStart || 1,
-    search: opts.search || null,
-    searchPages: opts.searchPages || 1,
-    todayOnly: !!opts.todayOnly,
-  });
-}

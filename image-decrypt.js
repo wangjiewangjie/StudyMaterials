@@ -59,8 +59,8 @@ function writeCachedZzz(code) {
   try {
     fs.mkdirSync(path.dirname(ZZZ_CACHE), { recursive: true });
     fs.writeFileSync(ZZZ_CACHE, code, 'utf8');
-  } catch (e) {
-    console.warn('[image-decrypt] 无法写入 zzz 缓存:', e.message);
+  } catch (_) {
+    // 静默：缓存写入失败不影响解密，下次回退到重新拉取
   }
 }
 
@@ -71,7 +71,6 @@ async function resolveZzzCode(siteCandidates = []) {
     try {
       const code = await fetchZzzCode(base);
       writeCachedZzz(code);
-      console.log('[image-decrypt] 已加载 zzz.js ←', base);
       return code;
     } catch (e) {
       errors.push(`${base}: ${e.message}`);
@@ -80,7 +79,6 @@ async function resolveZzzCode(siteCandidates = []) {
 
   const cached = readCachedZzz();
   if (cached) {
-    console.warn('[image-decrypt] 源站不可达，使用本地 zzz.js 缓存');
     return cached;
   }
 
@@ -183,4 +181,4 @@ async function decryptBuffer(encryptedBuf, siteCandidates = []) {
   return Buffer.from(result, 'base64');
 }
 
-module.exports = { decryptBuffer, resetDecrypt, ensureDecryptReady, ZZZ_CACHE };
+module.exports = { decryptBuffer, resetDecrypt, ensureDecryptReady };

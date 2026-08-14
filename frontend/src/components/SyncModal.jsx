@@ -3,24 +3,14 @@ import { Modal, Button } from 'antd';
 import {
   SyncOutlined, CloseOutlined, ClockCircleOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons';
+import { formatElapsedHms } from '../utils/format.js';
 
-function formatElapsed(ms) {
-  const sec = Math.floor((ms || 0) / 1000);
-  const h = String(Math.floor(sec / 3600)).padStart(2, '0');
-  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
-  const s = String(sec % 60).padStart(2, '0');
-  return `${h}:${m}:${s}`;
-}
-
-// 同步进度模态框：总进度 / 统计 / 实时日志 / 耗时 / 预估倒计时。
+// 同步进度模态框：总进度 / 统计 / 实时日志 / 已运行耗时。
 export default function SyncModal({
   open,
   status,
   progress,
   elapsed,
-  etaMs = 0,
-  etaLabel = '',
-  remainingMs = 0,
   syncStats,
   syncLogs,
   onCancel,
@@ -34,11 +24,9 @@ export default function SyncModal({
     }
   }, [syncLogs]);
 
-  const elapsedLabel = formatElapsed(elapsed);
-  const remainingLabel = formatElapsed(remainingMs);
+  const elapsedLabel = formatElapsedHms(elapsed);
   const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
   const isDone = pct >= 100;
-  const overtime = !isDone && etaMs > 0 && remainingMs <= 0 && elapsed > etaMs;
 
   return (
     <Modal
@@ -64,22 +52,13 @@ export default function SyncModal({
               {isDone ? '同步已完成' : '正在同步数据索引'}
             </h2>
             <p className="text-xs text-gray-400 mt-1 mb-0">
-              {isDone
-                ? '本次同步任务已结束，可关闭窗口'
-                : etaLabel
-                  ? `预估约 ${etaLabel}，请勿关闭窗口`
-                  : '请勿关闭窗口，后台正在拉取最新节点数据'}
+              {isDone ? '本次同步任务已结束，可关闭窗口' : '请勿关闭窗口，后台正在拉取最新节点数据'}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ph-orange font-bold tabular-nums">
               <span className="inline-flex items-center gap-1.5">
                 <ClockCircleOutlined style={{ fontSize: 12 }} />
                 已运行 {elapsedLabel}
               </span>
-              {!isDone && etaMs > 0 && (
-                <span className="text-ph-orange-light">
-                  {overtime ? '已超出预估' : `预计剩余 ${remainingLabel}`}
-                </span>
-              )}
             </div>
           </div>
         </div>
@@ -115,25 +94,17 @@ export default function SyncModal({
               已处理 {syncStats.added + syncStats.skipped} / {syncStats.total || '—'} 条索引
             </span>
             <span className="tabular-nums">
-              {isDone
-                ? '已完成'
-                : etaMs > 0
-                  ? (overtime ? `超时 · ${elapsedLabel}` : `剩余 ${remainingLabel}`)
-                  : `运行中 · ${elapsedLabel}`}
+              {isDone ? '已完成' : `运行中 · ${elapsedLabel}`}
             </span>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <div className="bg-[#121212] border border-white/5 rounded-lg p-3 text-center">
             <div className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">新增</div>
             <div className="text-lg font-black text-emerald-400 tabular-nums">
               {syncStats.added ?? 0}
             </div>
-          </div>
-          <div className="bg-[#121212] border border-white/5 rounded-lg p-3 text-center">
-            <div className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">失败</div>
-            <div className="text-lg font-black text-red-400 tabular-nums">0</div>
           </div>
           <div className="bg-[#121212] border border-white/5 rounded-lg p-3 text-center">
             <div className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">跳过</div>
@@ -179,11 +150,6 @@ export default function SyncModal({
             <ClockCircleOutlined style={{ fontSize: 14 }} />
             耗时 {elapsedLabel}
           </span>
-          {!isDone && etaLabel && (
-            <span className="text-xs text-ph-orange-light font-medium pl-6">
-              {overtime ? '超出预估，仍在进行' : `预计剩余 ${remainingLabel}（共约 ${etaLabel}）`}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-2">
           <Button

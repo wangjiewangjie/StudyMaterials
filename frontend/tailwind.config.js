@@ -39,16 +39,6 @@ export default {
         sans: ['Segoe UI', 'Microsoft YaHei', 'sans-serif'],
         mono: ['Consolas', 'Courier New', 'monospace'],
       },
-      animation: {
-        'fade-in': 'fadeIn 0.2s ease-out',
-        'spin-slow': 'spin 2s linear infinite',
-      },
-      keyframes: {
-        fadeIn: {
-          '0%': { opacity: '0' },
-          '100%': { opacity: '1' },
-        },
-      },
     },
   },
   plugins: [],

@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConfigProvider, theme as antdTheme, App as AntdApp } from 'antd';
+import { BrowserRouter } from 'react-router-dom';
 import zhCN from 'antd/locale/zh_CN';
 import App from './App.jsx';
 import './index.css';
@@ -11,9 +12,10 @@ const ORANGE_LIGHT = '#ffaa22';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ConfigProvider
-      locale={zhCN}
-      theme={{
+    <BrowserRouter>
+      <ConfigProvider
+        locale={zhCN}
+        theme={{
         algorithm: antdTheme.darkAlgorithm,
         token: {
           colorPrimary: ORANGE,
@@ -46,13 +48,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           colorInfoBorder: 'rgba(255, 153, 0, 0.30)',
         },
         components: {
-          Layout: {
-            headerBg: '#0A0A0A',
-            bodyBg: '#050505',
-            headerHeight: 64,
-            headerPadding: '0 22px',
-            headerColor: '#ffffff',
-          },
           Card: {
             colorBgContainer: '#121212',
             headerBg: 'transparent',
@@ -78,10 +73,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             paddingBlock: 4,
             paddingInline: 11,
           },
-          InputNumber: {
-            colorBgContainer: '#141416',
-            colorBorder: 'rgba(255,255,255,0.10)',
-          },
           Button: {
             colorPrimary: ORANGE,
             colorPrimaryHover: ORANGE_LIGHT,
@@ -98,33 +89,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             trackBg: '#1a1a1e',
             itemSelectedBg: '#2a2a2e',
           },
-          Select: {
-            colorBgContainer: '#1a1a1e',
-            colorBorder: 'rgba(255,255,255,0.10)',
-            optionSelectedBg: 'rgba(255, 153, 0, 0.15)',
-            optionSelectedColor: ORANGE,
-            colorBgElevated: '#141416',
-          },
-          Switch: {
-            colorPrimary: ORANGE,
-          },
-          Dropdown: {
-            colorBgElevated: '#141416',
-            colorBorderSecondary: 'rgba(255,255,255,0.08)',
-          },
-          Popover: {
-            colorBgElevated: '#141416',
-            colorBorderSecondary: 'rgba(255,255,255,0.08)',
-          },
-          Pagination: {
-            colorBgContainer: '#1a1a1e',
-            colorBorder: 'rgba(255,255,255,0.08)',
-            colorPrimary: ORANGE,
-            itemActiveBg: ORANGE,
-          },
-          Tooltip: {
-            colorBgDefault: '#141416',
-          },
           Empty: {
             colorTextDescription: '#777777',
           },
@@ -135,5 +99,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <App />
       </AntdApp>
     </ConfigProvider>
+    </BrowserRouter>
   </React.StrictMode>
 );

@@ -10,14 +10,13 @@ const os = require('os');
 const axios = require('axios');
 const { EventEmitter } = require('events');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
-  loadSiteConfigs, getSiteConfigs, getSites, getBaseUrl,
-  estimateCrawlTime } = require('./crawler');
+  getSiteConfigs, getSites, getBaseUrl, setFailureLogPath, flushFailureReport, formatRequestError } = require('./crawler');
 const { decryptBuffer, resetDecrypt, ensureDecryptReady } = require('./image-decrypt');
-const { normalizeUpstreamUrl, unwrapCdnProxyUrl } = require('./lib/hls-url');
+const { normalizeUpstreamUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
-const { matchesExclude, filterExcludedArticles } = require('./lib/exclude');
-const { startConsoleCountdown, formatDuration } = require('./lib/crawl-eta');
+const { filterExcludedArticles } = require('./lib/exclude');
 const { sanitizeDetailBlocks, sanitizeDetailContent } = require('./lib/detail-noise');
+const { createSyncLogger } = require('./lib/sync-logger');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
 const PORT_FILE = path.join(__dirname, '.server-port');
@@ -53,12 +52,27 @@ function findAvailablePort(startPort) {
   });
 }
 const OUT_DIR = path.resolve(__dirname, 'output');
+setFailureLogPath(path.join(OUT_DIR, 'crawl-failures.json'));
+const SYNC_LOG_PATH = path.join(OUT_DIR, 'sync-log.json');
 const JSON_PATH = path.join(OUT_DIR, 'index.json');
 const FAV_PATH = path.join(OUT_DIR, 'favorites.json');
 const FIXED_TAGS_PATH = defaultFixedPath(OUT_DIR);
 const BUILD_DIR = path.join(__dirname, 'public', 'build');
 const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS, 10) || 90000;
 const REFRESH_TIMEOUT_MS = parseInt(process.env.REFRESH_TIMEOUT_MS, 10) || 60000;
+
+// 结构化同步日志单例：进程启动时清空旧日志，运行期间持续可靠写入本地 JSON 文件
+const syncLogger = createSyncLogger({ path: SYNC_LOG_PATH, flushOnExit: true });
+syncLogger.clear();                 // 重启清空旧日志
+syncLogger.installExitFlush();      // 退出前同步刷盘
+
+/** 把 crawl 的 onLog 回调桥接到结构化日志：既保留原内存数组（供接口返回），也落盘 */
+function makeOnLog(scope, array) {
+  return (m) => {
+    if (array) array.push(m);
+    syncLogger.info(scope, m);
+  };
+}
 
 function shortUrl(url, max = 120) {
   if (!url) return '';
@@ -121,17 +135,6 @@ function rebuildIdMap(articles) {
   for (let i = 0; i < articles.length; i++) {
     indexIdMap.set(articles[i].id, i);
   }
-}
-
-function writeIndex(articles) {
-  indexCache = articles;
-  rebuildIdMap(articles);
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-  const data = JSON.stringify(articles, null, 2);
-  fs.writeFile(JSON_PATH, data, 'utf8', (err) => {
-    if (err) { console.warn('[索引] 写入失败:', err.message); return; }
-    try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
-  });
 }
 
 /** 异步写索引：内存缓存立即更新，磁盘写入不阻塞响应 */
@@ -769,9 +772,13 @@ app.get('/api/sync-events', (req, res) => {
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   const onBatch = (data) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'batch', ...data })}\n\n`);
+  };
+  const onProgress = (data) => {
+    res.write(`data: ${JSON.stringify({ type: 'progress', ...data })}\n\n`);
   };
   syncEmitter.on('batch', onBatch);
+  syncEmitter.on('progress', onProgress);
 
   // 保活心跳，防止代理/浏览器超时断开
   const keepAlive = setInterval(() => {
@@ -781,62 +788,15 @@ app.get('/api/sync-events', (req, res) => {
   req.on('close', () => {
     clearInterval(keepAlive);
     syncEmitter.off('batch', onBatch);
+    syncEmitter.off('progress', onProgress);
   });
 });
 
-// 在线搜索并入库
-// 多标签顺序同步
-app.post('/api/sync-tags', async (req, res) => {
-  const tags = (req.body && req.body.tags) || [];
-  if (!Array.isArray(tags) || tags.length === 0) return res.status(400).json({ error: '需要标签数组' });
-  const searchPages = parseInt(req.body && req.body.pages, 10) || 1;
-  const logs = [`开始同步 ${tags.length} 个标签: ${tags.join(', ')}`];
-  try {
-    // 抓取前记录基线数量
-    const existingIndex = loadIndex(JSON_PATH);
-    const baselineCount = existingIndex.length;
-
-    // 标签搜索顺序执行，避免对 index.json 的竞态条件
-    let totalAdded = 0;
-    for (const tag of tags) {
-      const tagLogs = [];
-      try {
-        tagLogs.push(`[${tag}] 开始搜索...`);
-        const result = await crawl({
-          search: tag,
-          searchPages,
-          replace: false,
-          limit: 50,
-          outDir: OUT_DIR,
-          jsonPath: JSON_PATH,
-          concurrency: 15,
-          pushEvery: 5,
-          onBatch: () => { onIndexChanged(); },
-          onLog: (m) => tagLogs.push(m),
-        });
-        totalAdded += result.added;
-        tagLogs.push(`[${tag}] 完成: +${result.added} 条`);
-      } catch (err) {
-        tagLogs.push(`[${tag}] 失败: ${err.message}`);
-      }
-      logs.push(...tagLogs);
-    }
-
-    // 加载最终结果并计算实际新增数量
-    onIndexChanged();
-    const currentIndex = getIndex();
-    const actualAdded = currentIndex.length - baselineCount;
-    const withVideo = currentIndex.filter((a) => a.video && a.video.url).length;
-    logs.push(`同步完成: +${actualAdded} 新增，共 ${currentIndex.length} 条 (${withVideo} 有视频)`);
-
-    res.json({ ok: true, added: actualAdded, updated: 0, total: currentIndex.length, logs });
-  } catch (err) {
-    res.status(500).json({ error: err.message, logs });
-  }
-});
 
 // 关键词同步：进度记在 keyword-progress.json；crawl 写索引用互斥锁串行化
 const KW_PROGRESS_PATH = path.join(OUT_DIR, 'keyword-progress.json');
+// 关键词同步每个站点的最低条数（等价于 list 模式的 minPerSite，逐站翻页直到凑满或耗尽）
+const KW_MIN_PER_SITE = 50;
 
 function loadKeywordProgress() {
   try {
@@ -865,10 +825,11 @@ app.post('/api/sync-keywords', async (req, res) => {
     return res.status(400).json({ error: '需要关键词数组' });
   }
 
-  // 加载进度（keyword -> lastPage）
+  // 加载进度（keyword -> 已同步次数；关键词整轮抓取，不再按页增量）
   const progress = loadKeywordProgress();
   const logs = [`开始关键词同步: ${keywords.length} 个关键词`];
   const baselineCount = getIndex().length;
+  syncLogger.info('sync-keywords', '开始关键词同步', { keywords });
 
   // 串行执行每个关键词的 crawl（避免 index.json 竞态），
   // 但每个关键词独立处理错误，单个失败不影响后续
@@ -876,36 +837,34 @@ app.post('/api/sync-keywords', async (req, res) => {
   for (const kw of keywords) {
     const kwLogs = [`[${kw}] 开始搜索...`];
 
-    // 计算下一页（增量同步）
-    const lastPage = progress[kw] || 0;
-    const nextPage = lastPage + 1;
-
+    // 关键词按"每站最低 N 条"整轮抓取，progress[kw] 记录已同步次数
     try {
       // 用互斥锁保护 crawl 对 index.json 的读-改-写
+      // 关键词按"每站最低 KW_MIN_PER_SITE 条"逐站翻页抓取，limit 置 0 关闭全局上限，
+      // 由 fetchMinPerSite 在各站点内各自凑满/耗尽，从而保证每个站点约 50 条。
       const result = await withIndexLock(() => crawl({
         search: kw,
-        searchPages: 1,
-        searchPageStart: nextPage,
+        minPerSite: KW_MIN_PER_SITE,
         replace: false,
-        limit: 50,
+        limit: 0,
         outDir: OUT_DIR,
         jsonPath: JSON_PATH,
         concurrency: 15,
         pushEvery: 5,
         onBatch: () => { onIndexChanged(); },
-        onLog: (m) => kwLogs.push(m),
+        onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
+        onLog: makeOnLog('sync-keywords', kwLogs),
+        failureScope: 'sync-keywords',
       }));
 
       const crawled = result.crawled || 0;
       const added = result.added || 0;
       const exhausted = crawled === 0;
 
-      // 仅当抓取到数据时才推进页码（耗尽时保持当前页，避免空翻页）
-      if (!exhausted) {
-        progress[kw] = nextPage;
-      }
+      // 记录该关键词已同步次数（关键词现整轮抓取，不再按页增量翻页）
+      progress[kw] = (progress[kw] || 0) + 1;
 
-      kwLogs.push(`[${kw}] 完成: 抓取 ${crawled} 条, 新增 ${added} 条${exhausted ? ' (已耗尽)' : ''}`);
+      kwLogs.push(`[${kw}] 完成: 抓取 ${crawled} 条, 新增 ${added} 条${exhausted ? ' (无结果)' : ''}`);
 
       keywordResults.push({
         keyword: kw,
@@ -913,7 +872,7 @@ app.post('/api/sync-keywords', async (req, res) => {
         total: result.total || 0,
         crawled,
         exhausted,
-        page: exhausted ? lastPage : nextPage,
+        page: progress[kw],
         error: null,
         logs: kwLogs,
       });
@@ -925,7 +884,7 @@ app.post('/api/sync-keywords', async (req, res) => {
         total: 0,
         crawled: 0,
         exhausted: false,
-        page: lastPage,
+        page: progress[kw] || 0,
         error: err.message,
         logs: kwLogs,
       });
@@ -945,6 +904,8 @@ app.post('/api/sync-keywords', async (req, res) => {
     logs.push(...kr.logs);
   }
   logs.push(`关键词同步完成: 共新增 ${totalAdded} 条，索引总计 ${currentIndex.length} 条`);
+  syncLogger.info('sync-keywords', '关键词同步完成', { totalAdded, total: currentIndex.length });
+  syncLogger.flush();
 
   res.json({
     ok: true,
@@ -955,37 +916,13 @@ app.post('/api/sync-keywords', async (req, res) => {
   });
 });
 
-// 爬取耗时预估（同步弹窗倒计时用）
-app.get('/api/crawl-estimate', (req, res) => {
-  const mode = String(req.query.mode || 'sync');
-  const concurrency = 3;
-  let eta;
-  if (mode === 'startup') {
-    eta = estimateCrawlTime({ minPerSite: 50, concurrency });
-  } else if (mode === 'tags') {
-    const n = Math.max(1, parseInt(req.query.tags, 10) || 1);
-    eta = estimateCrawlTime({
-      search: 'tag',
-      searchPages: parseInt(req.query.pages, 10) || 1,
-      concurrency,
-    });
-    eta.estimateSec = Math.ceil(eta.estimateSec * n * 0.85);
-    eta.estimateMs = eta.estimateSec * 1000;
-    eta.estimateLabel = formatDuration(eta.estimateSec);
-    eta.modeLabel = `${n} 个标签同步`;
-  } else {
-    const pageStart = parseInt(req.query.pageStart, 10) || 1;
-    const pageEnd = parseInt(req.query.pageEnd, 10) || pageStart;
-    eta = estimateCrawlTime({ pageStart, pageEnd, concurrency });
-  }
-  res.json({ ok: true, ...eta });
-});
 
 // 列表页爬取
 app.post('/api/crawl', async (req, res) => {
   const pageStart = parseInt(req.body && req.body.pageStart, 10) || 1;
   const pageEnd = parseInt(req.body && req.body.pageEnd, 10) || pageStart;
   const logs = [];
+  syncLogger.info('crawl', '开始列表页爬取', { pageStart, pageEnd });
   try {
     const result = await crawl({
       pageStart,
@@ -995,11 +932,18 @@ app.post('/api/crawl', async (req, res) => {
       concurrency: 15,
       pushEvery: 5,
       onBatch: () => { onIndexChanged(); },
-      onLog: (m) => logs.push(m),
+      onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
+      onLog: makeOnLog('crawl', logs),
+      failureScope: 'crawl',
     });
     onIndexChanged();
+    syncLogger.info('crawl', '列表页爬取完成', { added: result.added, total: result.total });
+    syncLogger.flush();
     res.json({ ok: true, added: result.added, total: result.total, logs });
   } catch (err) {
+    flushFailureReport({ scope: 'crawl', fatal: formatRequestError(err) });
+    syncLogger.error('crawl', '列表页爬取失败: ' + formatRequestError(err));
+    syncLogger.flush();
     res.status(500).json({ error: err.message, logs });
   }
 });
@@ -1012,6 +956,8 @@ app.get('*', (req, res) => {
 // 统一错误处理中间件：捕获所有未处理的异常，统一返回 JSON
 app.use((err, req, res, _next) => {
   console.error('[未处理错误]', err.message);
+  syncLogger.error('server', '未处理错误: ' + err.message);
+  syncLogger.flush();
   const status = err.status || (err.response && err.response.status) || 500;
   res.status(status).json({ error: err.message || '内部错误' });
 });
@@ -1034,17 +980,31 @@ app.use((err, req, res, _next) => {
     console.log(`  索引 ${getIndex().length} 条 · 收藏 ${getFavorites().length} 条`);
     console.log('');
 
+    syncLogger.info('server', '服务已启动', {
+      port,
+      lanIps,
+      indexCount: getIndex().length,
+      favCount: getFavorites().length,
+    });
+    syncLogger.flush();
+
     // 预热图片解密脚本（多站回退 / 本地缓存），避免首张封面才失败
     ensureDecryptReady(getSites())
       .then(() => console.log('  图片解密脚本就绪'))
       .catch((e) => console.warn('  图片解密脚本未就绪:', e.message));
 
-    // 启动后静默后台爬取：先估时，控制台倒计时
+    // 启动后静默后台爬取（仅计时，不做预估）
     (async () => {
       const t0 = Date.now();
-      const eta = estimateCrawlTime({ minPerSite: 50, concurrency: 15 });
-      console.log(`  预计同步约 ${eta.estimateLabel}（${eta.rangeLabel}），约 ${eta.expectedArticles} 条`);
-      const stopCountdown = startConsoleCountdown(eta.estimateSec, '  后台同步中…');
+      const formatElapsed = (ms) => {
+        const sec = Math.max(0, Math.floor(ms / 1000));
+        return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+      };
+      const timer = setInterval(() => {
+        process.stdout.write(`\r  后台同步中… 已运行 ${formatElapsed(Date.now() - t0)}   `);
+      }, 1000);
+      if (typeof timer.unref === 'function') timer.unref();
+      syncLogger.info('startup-bg', '后台同步启动', { minPerSite: 50, concurrency: 15 });
       try {
         await crawl({
           minPerSite: 50,
@@ -1054,16 +1014,25 @@ app.use((err, req, res, _next) => {
           concurrency: 15,
           pushEvery: 5,
           onBatch: () => { onIndexChanged(); },
-          onLog: () => {},
+          onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
+          onLog: makeOnLog('startup-bg', null),
+          failureScope: 'startup-bg',
         });
         onIndexChanged();
-        stopCountdown();
+        clearInterval(timer);
+        process.stdout.write('\n');
         const sec = ((Date.now() - t0) / 1000).toFixed(1);
-        console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s（预估 ${eta.estimateSec}s）\n`);
+        console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s\n`);
+        syncLogger.info('startup-bg', '后台同步完成', { total: getIndex().length, sec });
+        syncLogger.flush();
       } catch (e) {
-        stopCountdown();
+        clearInterval(timer);
+        process.stdout.write('\n');
+        flushFailureReport({ scope: 'startup-bg', fatal: formatRequestError(e), elapsedMs: Date.now() - t0 });
         const sec = ((Date.now() - t0) / 1000).toFixed(1);
-        console.warn(`  同步失败（耗时 ${sec}s）:`, e.message);
+        console.warn(`  同步失败（耗时 ${sec}s）:`, formatRequestError(e));
+        syncLogger.error('startup-bg', '后台同步失败: ' + e.message);
+        syncLogger.flush();
       }
     })();
   });

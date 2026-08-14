@@ -9,6 +9,7 @@ import {
 import PageShell from '../components/PageShell.jsx';
 import PageBanner from '../components/PageBanner.jsx';
 import { formatDate } from '../services/api.js';
+import { formatElapsedShort } from '../utils/format.js';
 import {
   STAT_GUTTER, STAT_RESPONSIVE, SRC_GUTTER, SRC_RESPONSIVE,
 } from '../constants/layout.js';
@@ -58,7 +59,6 @@ export default function SyncCenterView({
   lastSyncAt,
   syncing,
   elapsed = 0,
-  remainingMs = 0,
   onTriggerSync,
   keywordSyncing,
   keywordResults,
@@ -87,18 +87,7 @@ export default function SyncCenterView({
   })();
   const lastSyncDate = lastSyncAt ? formatDate(lastSyncAt) : '—';
 
-  const syncElapsedLabel = (() => {
-    const sec = Math.floor((elapsed || 0) / 1000);
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${String(s).padStart(2, '0')}`;
-  })();
-  const syncRemainingLabel = (() => {
-    const sec = Math.floor((remainingMs || 0) / 1000);
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${String(s).padStart(2, '0')}`;
-  })();
+  const syncElapsedLabel = formatElapsedShort(elapsed);
 
   const columns = [
     {
@@ -165,7 +154,7 @@ export default function SyncCenterView({
             }`}
           >
             {syncing
-              ? (remainingMs > 0 ? `预计剩余 ${syncRemainingLabel}` : `同步中 ${syncElapsedLabel}`)
+              ? `同步中 ${syncElapsedLabel}`
               : '立即全量同步'}
           </Button>
         )}

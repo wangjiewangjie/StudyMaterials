@@ -3,13 +3,7 @@ import {
   SearchOutlined, StarOutlined, StarFilled, FileTextOutlined, MenuOutlined,
 } from '@ant-design/icons';
 import { navBtnClass } from '../constants/layout.js';
-
-function formatElapsedShort(ms) {
-  const sec = Math.floor((ms || 0) / 1000);
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
+import { formatElapsedShort } from '../utils/format.js';
 
 export default function AppHeader({
   query,
@@ -24,7 +18,6 @@ export default function AppHeader({
   onHomeClick,
   syncing,
   elapsed = 0,
-  remainingMs = 0,
   isMobile,
   onOpenDrawer,
 }) {
@@ -109,9 +102,7 @@ export default function AppHeader({
               <span className={`w-2 h-2 rounded-full ${syncing ? 'bg-ph-text-muted' : 'bg-ph-orange'}`} />
               {syncing ? (
                 <span className="tabular-nums">
-                  {remainingMs > 0
-                    ? `剩余 ${formatElapsedShort(remainingMs)}`
-                    : `同步中 ${formatElapsedShort(elapsed)}`}
+                  同步中 {formatElapsedShort(elapsed)}
                 </span>
               ) : (
                 '同步'

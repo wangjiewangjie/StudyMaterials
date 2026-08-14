@@ -7,6 +7,7 @@ import {
   unwrapCdnProxyUrl, normalizeUpstreamUrl, proxyUrl,
   isAlreadyProxied, shouldProxy,
 } from './utils/hls-url.js';
+import { refreshVideo } from './services/api.js';
 
 const HLS_TIMEOUTS = {
   // CDN + 本地代理可能较慢；默认值（10s/20s）会触发超时错误。
@@ -23,6 +24,64 @@ const HLS_TIMEOUTS = {
 
 function logPlayer(...args) {
   console.error('[VideoPlayer]', ...args);
+}
+
+// ---------- 播放器彻底销毁 ----------
+// 目标：在播放新视频前，100% 终止上一个视频的播放进程（音频叠加的根因）。
+// 旧实现的缺陷：hls.destroy() 一旦抛错，art.destroy() 会被跳过，而 artRef 已被置空，
+// 导致上一个 Artplayer 实例（及其 HLS MediaSource）彻底“丢失”且无法再次清理，
+// HLS 致命错误处理里甚至可能 hls.startLoad() 继续出声。
+// 这里拆分每一步、各自 try/catch，并在最后兜底移除容器内所有 <video> 节点。
+
+function stopVideoElement(video) {
+  if (!video) return;
+  try { video.pause(); } catch (_) {}
+  try { video.removeAttribute('src'); } catch (_) {}
+  try { if (video.src) { video.removeAttribute('src'); video.load(); } } catch (_) {}
+  try { video.load(); } catch (_) {}
+}
+
+/** 销毁单个 Artplayer 实例：暂停 → 销毁 HLS → 销毁 Artplayer → 兜底移除 DOM */
+function teardownArt(art) {
+  if (!art) return;
+  // 1) 先强行暂停并清空底层 <video>，切断 MSE/音频来源
+  try {
+    const v = art.video || (art.template && art.template.$video);
+    stopVideoElement(v);
+  } catch (_) {}
+  // 2) 销毁 HLS 实例（独立 try，避免一个失败连累另一个）
+  try {
+    if (art.hls) { art.hls.destroy(); art.hls = null; }
+  } catch (_) {}
+  // 3) 销毁 Artplayer 自身（内部 reset 会清空 src）
+  try {
+    art.destroy(true);
+  } catch (_) {}
+  // 4) 兜底：移除容器内所有残留 <video> 节点，彻底断开音频
+  try {
+    const cont = art.template && art.template.$container;
+    if (cont) {
+      const vids = cont.querySelectorAll('video');
+      for (const vd of vids) {
+        try { vd.pause(); } catch (_) {}
+        try { vd.remove(); } catch (_) {}
+      }
+      cont.innerHTML = '';
+    }
+  } catch (_) {}
+}
+
+/** 清理容器：暂停并移除所有 <video>，防止任何游离节点继续出声 */
+function clearContainer(container) {
+  if (!container) return;
+  try {
+    const vids = container.querySelectorAll('video');
+    for (const vd of vids) {
+      try { vd.pause(); } catch (_) {}
+      try { vd.remove(); } catch (_) {}
+    }
+    container.innerHTML = '';
+  } catch (_) {}
 }
 
 // ---------- 播放器 UI 状态机 ----------
@@ -336,23 +395,19 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
     const createPlayer = (url, isFallback) => {
       playerAliveRef.current = true;
 
-      // 销毁旧实例（含 HLS）
+      // 销毁旧实例（含 HLS）—— 使用健壮销毁，确保上一个视频的播放进程被彻底终止
       if (artRef.current) {
         // 保存旧播放器的进度
         try {
           const t = artRef.current.currentTime;
           saveProgress(item.id, t);
         } catch (_) {}
-        try {
-          if (artRef.current.hls) artRef.current.hls.destroy();
-          artRef.current.destroy(false);
-        } catch (e) {
-          logPlayer('销毁失败', e);
-        }
+        teardownArt(artRef.current);
         artRef.current = null;
       }
 
-      container.innerHTML = '';
+      // 兜底清理容器，移除任何残留 <video> 节点（防御性，避免游离音频）
+      clearContainer(container);
       const video = document.createElement('video');
       video.setAttribute('playsinline', '');
       video.setAttribute('webkit-playsinline', '');
@@ -422,10 +477,8 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 30000); // 30s 超时（原 60s 太长）
-        const res = await fetch(`/api/refresh/${item.id}`, { signal: ctrl.signal });
+        const data = await refreshVideo(item.id, ctrl.signal);
         clearTimeout(timer);
-        if (gen !== loadGenRef.current) return null;
-        const data = await res.json();
         if (gen !== loadGenRef.current) return null;
         return data;
       } catch (err) {
@@ -520,15 +573,12 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
     if (artRef.current) {
       try { saveProgress(item.id, artRef.current.currentTime); } catch (_) {}
     }
+    // 健壮销毁：彻底终止上一个视频的播放进程（含 HLS + <video> 节点）
     if (artRef.current) {
-      try {
-        if (artRef.current.hls) artRef.current.hls.destroy();
-        artRef.current.destroy(false);
-      } catch (e) {
-        logPlayer('清理销毁失败', e);
-      }
+      teardownArt(artRef.current);
       artRef.current = null;
     }
+    clearContainer(containerRef.current);
   }, []);
 
   const retry = useCallback(() => { loadSource(); }, [loadSource]);

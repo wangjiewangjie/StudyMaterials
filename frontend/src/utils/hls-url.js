@@ -28,7 +28,7 @@ export function unwrapCdnProxyUrl(url, maxDepth = 8) {
 }
 
 /** 如果 url 是本地 /proxy/... 路径，解码出嵌入的目标地址 */
-export function extractLocalProxyTarget(url) {
+function extractLocalProxyTarget(url) {
   if (!url) return url;
   if (/^\/proxy\//i.test(url)) {
     try {

@@ -17,7 +17,6 @@ export function useAppData(message) {
   const [sites, setSites] = useState([]);
   const [tagList, setTagList] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
-  const [lastQuery, setLastQuery] = useState('');
 
   const loadSites = useCallback(async () => {
     try {
@@ -38,7 +37,6 @@ export function useAppData(message) {
   const loadVideos = useCallback(async (q, opts = {}) => {
     const silent = !!opts.silent;
     if (!silent) setLoadingList(true);
-    setLastQuery(q || '');
     try {
       const data = await fetchVideos(q);
       setItems(data.items || []);
@@ -121,11 +119,11 @@ export function useAppData(message) {
   }, [items]);
 
   return {
-    items, setItems,
+    items,
     favorites, favIds,
     sites, siteCounts, tagList,
-    loadingList, lastQuery, setLastQuery,
-    loadVideos, loadFavorites, loadSites,
+    loadingList,
+    loadVideos,
     toggleFavorite, clearAllFavorites,
   };
 }

@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { App as AntdApp, Drawer, Button, Spin } from 'antd';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
 } from '@ant-design/icons';
@@ -9,6 +10,7 @@ import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { useAppData } from './hooks/useAppData.js';
 import { useSync } from './hooks/useSync.js';
 import { downloadFavorites } from './services/api.js';
+import { formatElapsedShort } from './utils/format.js';
 
 // 路由级代码分割：DetailView 含 HLS.js + Artplayer，单独拆包可减首屏 40%+
 const HomeView = lazy(() => import('./views/HomeView.jsx'));
@@ -26,14 +28,28 @@ const VIEW = {
 
 const MOBILE_BREAKPOINT = 768;
 
-function historyState(view, selectedId = null) {
-  return { view, selectedId };
+// 路由路径 ⇄ 视图 映射（真实 URL，支持刷新 / 分享 / 前进后退）
+function parseLocation(pathname) {
+  if (!pathname || pathname === '/') return { view: VIEW.HOME, id: null };
+  if (pathname === '/favorites') return { view: VIEW.FAVORITES, id: null };
+  if (pathname === '/sync') return { view: VIEW.SYNC_CENTER, id: null };
+  const m = pathname.match(/^\/detail\/(.+)$/);
+  if (m) return { view: VIEW.DETAIL, id: decodeURIComponent(m[1]) };
+  return { view: VIEW.HOME, id: null }; // 未知路径兜底回首页
+}
+
+function pathForView(view, id) {
+  if (view === VIEW.DETAIL && id) return `/detail/${encodeURIComponent(id)}`;
+  if (view === VIEW.FAVORITES) return '/favorites';
+  if (view === VIEW.SYNC_CENTER) return '/sync';
+  return '/';
 }
 
 export default function App() {
   const { message } = AntdApp.useApp();
-  const [view, setView] = useState(VIEW.HOME);
-  const [selected, setSelected] = useState(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const [query, setQuery] = useState('');
   const [favQuery, setFavQuery] = useState('');
   const [activeTag, setActiveTag] = useState('');
@@ -43,14 +59,12 @@ export default function App() {
     typeof window !== 'undefined' ? window.innerWidth < MOBILE_BREAKPOINT : false
   );
 
-  const scrollPositions = useRef({
-    [VIEW.HOME]: 0,
-    [VIEW.FAVORITES]: 0,
-    [VIEW.SYNC_CENTER]: 0,
-  });
-  const pendingScrollY = useRef(null);
+  // 视图由 URL 派生（路由式导航）
+  const route = useMemo(() => parseLocation(location.pathname), [location.pathname]);
+  const view = route.view;
   const viewRef = useRef(view);
-  const selectedRef = useRef(selected);
+  viewRef.current = view;
+  const scrollRef = useRef({}); // 各路由滚动位置
   const itemsRef = useRef([]);
   const favoritesRef = useRef([]);
 
@@ -59,8 +73,6 @@ export default function App() {
     loadVideos, toggleFavorite, clearAllFavorites,
   } = useAppData(message);
 
-  viewRef.current = view;
-  selectedRef.current = selected;
   itemsRef.current = items;
   favoritesRef.current = favorites;
 
@@ -68,33 +80,16 @@ export default function App() {
     loadVideos(query.trim());
   }, [loadVideos, query]);
 
+  const handleSyncBatch = useCallback(() => {
+    loadVideos(query.trim(), { silent: true });
+  }, [loadVideos, query]);
+
   const {
-    syncing, syncLogs, status, progress, elapsed, etaMs, etaLabel, remainingMs, syncStats,
+    syncing, syncLogs, status, progress, elapsed, syncStats,
     syncHistory, lastSyncAt, startSync, cancelSync,
     keywordSyncing, keywordResults,
     startKeywordSync, cancelKeywordSync,
-  } = useSync(message, handleSyncDone);
-
-  // 同步中通过 SSE 接收批次通知，收到后静默刷新列表（替代 2.5s 轮询）
-  useEffect(() => {
-    if (!syncing && !keywordSyncing) return undefined;
-    loadVideos(query.trim(), { silent: true });
-    // 不支持 EventSource 时降级为 5s 轮询
-    if (typeof EventSource === 'undefined') {
-      const t = setInterval(() => loadVideos(query.trim(), { silent: true }), 5000);
-      return () => clearInterval(t);
-    }
-    const es = new EventSource('/api/sync-events');
-    es.onmessage = () => { loadVideos(query.trim(), { silent: true }); };
-    // EventSource 断开后浏览器会自动重连，无需手动处理
-    return () => es.close();
-  }, [syncing, keywordSyncing, loadVideos, query]);
-
-  const saveScroll = useCallback((forView) => {
-    if (forView && forView !== VIEW.DETAIL) {
-      scrollPositions.current[forView] = window.scrollY;
-    }
-  }, []);
+  } = useSync(message, handleSyncDone, handleSyncBatch);
 
   const findItemById = useCallback((id) => {
     if (!id) return null;
@@ -103,71 +98,29 @@ export default function App() {
       || null;
   }, []);
 
-  const applyViewState = useCallback((nextView, nextSelected, { restoreScroll = false, scrollToTop = false } = {}) => {
-    setView(nextView);
-    setSelected(nextSelected);
-    if (scrollToTop) {
-      pendingScrollY.current = 0;
-    } else if (restoreScroll && nextView !== VIEW.DETAIL) {
-      pendingScrollY.current = scrollPositions.current[nextView] || 0;
-    } else {
-      pendingScrollY.current = null;
-    }
-  }, []);
-
-  const pushView = useCallback((nextView, nextSelected = null, options = {}) => {
-    saveScroll(viewRef.current);
-    window.history.pushState(
-      historyState(nextView, nextSelected?.id ?? null),
-      ''
-    );
-    const scrollToTop = options.scrollToTop ?? (nextView === VIEW.DETAIL);
-    applyViewState(nextView, nextSelected, {
-      restoreScroll: !scrollToTop && nextView !== VIEW.DETAIL,
-      scrollToTop,
-    });
-  }, [saveScroll, applyViewState]);
-
-  // 初始化 history，并响应系统返回 / 前进
-  useEffect(() => {
-    const current = window.history.state;
-    if (!current || !current.view) {
-      window.history.replaceState(historyState(VIEW.HOME), '');
-    }
-
-    const onPopState = (event) => {
-      const state = event.state && event.state.view
-        ? event.state
-        : historyState(VIEW.HOME);
-
-      // 离开当前页面前保存滚动（详情页不缓存）
-      saveScroll(viewRef.current);
-
-      if (state.view === VIEW.DETAIL) {
-        const item = findItemById(state.selectedId) || selectedRef.current;
-        if (item) {
-          applyViewState(VIEW.DETAIL, item, { scrollToTop: true });
-          return;
-        }
-        // 找不到条目时退回首页
-        applyViewState(VIEW.HOME, null, { restoreScroll: true });
-        return;
-      }
-
-      applyViewState(state.view, null, { restoreScroll: true });
-    };
-
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [saveScroll, findItemById, applyViewState]);
-
-  // 视图切换后恢复列表滚动位置
+  // 路由切换：详情页置顶，列表页恢复上次滚动位置
   useLayoutEffect(() => {
-    if (pendingScrollY.current == null) return;
-    const y = pendingScrollY.current;
-    pendingScrollY.current = null;
-    window.scrollTo({ top: y, behavior: 'auto' });
-  }, [view, selected]);
+    const next = location.pathname;
+    const target = next.startsWith('/detail') ? 0 : (scrollRef.current[next] || 0);
+    window.scrollTo({ top: target, behavior: 'auto' });
+  }, [location.pathname]);
+
+  // 持续保存各路由的滚动位置（rAF 节流），用于返回时恢复
+  useEffect(() => {
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        scrollRef.current[location.pathname] = window.scrollY;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
     const onResize = () => {
@@ -197,67 +150,78 @@ export default function App() {
   }, [cancelSync]);
 
   const handleCardClick = useCallback((item) => {
-    pushView(VIEW.DETAIL, item, { scrollToTop: true });
-  }, [pushView]);
+    navigate(pathForView(VIEW.DETAIL, item.id));
+  }, [navigate]);
 
   const handleHomeClick = useCallback(() => {
-    if (viewRef.current !== VIEW.HOME) {
-      saveScroll(viewRef.current);
-      window.history.pushState(historyState(VIEW.HOME), '');
-    }
     setActiveTag('');
     setQuery('');
     loadVideos('');
     setDrawerOpen(false);
-    applyViewState(VIEW.HOME, null, { scrollToTop: true });
-  }, [loadVideos, saveScroll, applyViewState]);
+    if (viewRef.current === VIEW.HOME) {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    } else {
+      scrollRef.current['/'] = 0; // 回到首页置顶
+      navigate('/');
+    }
+  }, [loadVideos, navigate]);
 
   const handleFavoritesClick = useCallback(() => {
     setDrawerOpen(false);
     if (viewRef.current === VIEW.FAVORITES) {
-      saveScroll(VIEW.FAVORITES);
-      window.history.pushState(historyState(VIEW.HOME), '');
-      applyViewState(VIEW.HOME, null, { restoreScroll: true });
-      return;
+      navigate('/');
+    } else {
+      setFavQuery('');
+      navigate('/favorites');
     }
-    setFavQuery('');
-    pushView(VIEW.FAVORITES, null, { scrollToTop: false });
-  }, [saveScroll, applyViewState, pushView]);
+  }, [navigate]);
 
   const handleSyncCenterClick = useCallback(() => {
     setDrawerOpen(false);
-    if (viewRef.current === VIEW.SYNC_CENTER) return;
-    pushView(VIEW.SYNC_CENTER, null, { scrollToTop: true });
-  }, [pushView]);
+    if (viewRef.current !== VIEW.SYNC_CENTER) {
+      navigate('/sync');
+    }
+  }, [navigate]);
 
   const handleBack = useCallback(() => {
-    // 走浏览器历史，系统返回与按钮返回行为一致，并恢复上一页滚动
-    if (window.history.state?.view === VIEW.DETAIL) {
-      window.history.back();
-      return;
+    // 走浏览器历史；直接深链打开详情且无历史记录时回首页
+    if (location.key === 'default') {
+      navigate('/');
+    } else {
+      navigate(-1);
     }
-    applyViewState(VIEW.HOME, null, { restoreScroll: true });
-  }, [applyViewState]);
+  }, [location, navigate]);
 
   const handleTagClick = useCallback((tag) => {
-    saveScroll(viewRef.current);
-    window.history.pushState(historyState(VIEW.HOME), '');
     setActiveTag(tag);
     message.info(`已切换到标签「${tag}」`);
-    applyViewState(VIEW.HOME, null, { scrollToTop: true });
-  }, [message, saveScroll, applyViewState]);
+    if (viewRef.current === VIEW.HOME) {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    } else {
+      scrollRef.current['/'] = 0; // 回首页并置顶
+      navigate('/');
+    }
+  }, [message, navigate]);
 
   const handleSearch = useCallback(() => {
     setActiveTag('');
-    loadVideos(query.trim());
-  }, [query, loadVideos]);
+    const q = query.trim();
+    loadVideos(q);
+    // 搜索后必须回到首页展示结果，否则在详情/收藏/同步页搜索会“看起来没反应”
+    if (viewRef.current === VIEW.HOME) {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    } else {
+      scrollRef.current['/'] = 0; // 回首页并置顶
+      navigate('/');
+    }
+  }, [query, loadVideos, navigate]);
 
   const handleClearAll = useCallback(() => {
     clearAllFavorites();
   }, [clearAllFavorites]);
 
   const handleExport = useCallback(() => {
-    downloadFavorites('json');
+    downloadFavorites();
   }, []);
 
   // 同步完成后自动关闭弹窗
@@ -269,7 +233,7 @@ export default function App() {
     return undefined;
   }, [syncing, syncModalOpen, progress]);
 
-  const detailItem = selected;
+  const detailItem = view === VIEW.DETAIL ? findItemById(route.id) : null;
 
   return (
     <ErrorBoundary>
@@ -281,13 +245,13 @@ export default function App() {
         onSearch={handleSearch}
         favoritesCount={favorites.length}
         isFavoritesView={view === VIEW.FAVORITES}
+        isSyncCenterView={view === VIEW.SYNC_CENTER}
         onFavoritesClick={handleFavoritesClick}
         onSyncCenterClick={handleSyncCenterClick}
         onSyncClick={handleStartSync}
         onHomeClick={handleHomeClick}
         syncing={syncing}
         elapsed={elapsed}
-        remainingMs={remainingMs}
         isMobile={isMobile}
         onOpenDrawer={() => setDrawerOpen(true)}
       />
@@ -308,6 +272,7 @@ export default function App() {
 
       {view === VIEW.DETAIL && detailItem && (
         <DetailView
+          key={detailItem.id}
           item={detailItem}
           items={items}
           sites={sites}
@@ -318,6 +283,13 @@ export default function App() {
           onCardClick={handleCardClick}
           onTagClick={handleTagClick}
         />
+      )}
+
+      {view === VIEW.DETAIL && !detailItem && (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-ph-text-muted">
+          <Spin size="large" />
+          <div className="text-sm">正在加载详情…</div>
+        </div>
       )}
 
       {view === VIEW.FAVORITES && (
@@ -343,7 +315,6 @@ export default function App() {
           lastSyncAt={lastSyncAt}
           syncing={syncing}
           elapsed={elapsed}
-          remainingMs={remainingMs}
           onTriggerSync={handleStartSync}
           // 关键词同步
           keywordSyncing={keywordSyncing}
@@ -358,9 +329,6 @@ export default function App() {
         status={status}
         progress={progress}
         elapsed={elapsed}
-        etaMs={etaMs}
-        etaLabel={etaLabel}
-        remainingMs={remainingMs}
         syncStats={syncStats}
         syncLogs={syncLogs}
         onCancel={handleSyncCancel}
@@ -431,9 +399,7 @@ export default function App() {
             }`}
           >
             {syncing
-              ? (remainingMs > 0
-                ? `预计剩余 ${Math.floor(remainingMs / 1000 / 60)}:${String(Math.floor(remainingMs / 1000) % 60).padStart(2, '0')}`
-                : `同步中 ${Math.floor(elapsed / 1000 / 60)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, '0')}`)
+              ? `同步中 ${formatElapsedShort(elapsed)}`
               : '立即同步'}
           </Button>
         </div>

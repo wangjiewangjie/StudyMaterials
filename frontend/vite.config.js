@@ -23,7 +23,6 @@ export default defineConfig({
     proxy: {
       '/api': `http://localhost:${backendPort}`,
       '/proxy': `http://localhost:${backendPort}`,
-      '/files': `http://localhost:${backendPort}`,
     },
   },
 });
