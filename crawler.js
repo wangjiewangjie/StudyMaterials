@@ -14,11 +14,23 @@ const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
 const { matchesExclude, filterExcluded } = require('./lib/exclude');
 const { isPromoDetailText } = require('./lib/detail-noise');
 const { writeFailureReport, setFailureLogPath } = require('./lib/crawl-failure-log');
+const permanentResolver = require('./lib/permanent-resolve');
 
-// 站点项：{ url, name, todayPath, enabled, archiveSuffix? }；archiveSuffix 默认 "/"，部分站用 ".html"
+// 站点项：{ url, name, todayPath, enabled, archiveSuffix?, permanentUrl?, permanentLabel? }
+//   permanentUrl   可选：站点「永久地址/发布页」。当前 url 失效时，据永久页确认最新可用线路，
+//                  再把 url 手工改成该线路即可（源站域名常更换，改配置不动代码）。
+//   permanentLabel 可选：标记默认采用哪条线路，如：线路一。
+// 备注（各站永久地址情况）：
+//   - 91吃瓜：永久发布页 https://91cg.asia/（线路一~六）；注意线路为页面 JS 动态生成，需浏览器渲染查看，
+//     且不同线路域名解析情况随时变化，故不自动改写、由人工按永久页确认。
+//   - 黑料网：站内「地址发布页」/github.html（同源，站挂即不可用）；51吃瓜/黑料不打烊：站内「回家的路」页面。
+//   - 51fans：最新地址通过邮箱 51fanswang@gmail.com 索取；51爆料：未见独立永久地址。
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
 const DEFAULT_SITE_CONFIGS = [
-  { url: 'https://armed.izbfsaxh.cc', name: '91吃瓜', todayPath: '/category/zxcghl/', enabled: true },
+  {
+    url: 'https://armed.izbfsaxh.cc', name: '91吃瓜', todayPath: '/category/zxcghl/',
+    permanentUrl: 'https://91cg.asia/', permanentLabel: '线路一', enabled: true,
+  },
   { url: 'https://d1ve8vvwughzqa.cloudfront.net', name: '91视频', todayPath: '/category/jrxw1/', enabled: false },
   { url: 'https://breast.eiejvjgex.cc', name: '51fans', todayPath: '/order/today/', enabled: true },
   { url: 'https://assert.pbtiodqn.cc', name: '51爆料', todayPath: '/category/jrbl/', enabled: true },
@@ -34,6 +46,18 @@ function loadSiteConfigs() {
     if (Array.isArray(arr) && arr.length) return arr;
   } catch (_) { /* 回退到默认配置 */ }
   return DEFAULT_SITE_CONFIGS.map((s) => ({ ...s }));
+}
+
+/** 站点配置回写 output/sites.json；写失败仅告警，不阻断抓取。 */
+function saveSiteConfigs(configs) {
+  const arr = Array.isArray(configs) ? configs : getSiteConfigs();
+  try {
+    const dir = path.dirname(SITES_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(SITES_PATH, JSON.stringify(arr, null, 2), 'utf8');
+  } catch (e) {
+    console.warn(`[站点配置] 写入 ${SITES_PATH} 失败: ${e.message}`);
+  }
 }
 
 // 模块级缓存；reloadSites() 后下次调用自动用新配置
@@ -230,6 +254,62 @@ class SiteCircuitBreaker {
   }
 }
 const siteBreaker = new SiteCircuitBreaker();
+
+// ---------- 永久地址自动切换 ----------
+// 站点失效（熔断）时，若其配置了 permanentUrl，用无头浏览器渲染永久页解析「线路一」
+// 并校验可达后自动改写 url（配置持久化 + 立即 reloadSites），下次抓取即用新线路。
+// 线路一不可达时依次兜底其余线路；全部不可达或不满足冷却则不切换，避免把站点切到坏线路。
+let failoverRunning = false;
+let failoverLastAttempt = 0;
+const FAILOVER_COOLDOWN_MS = 5 * 60 * 1000; // 5 分钟内最多触发一次，避免频繁拉起无头浏览器
+
+function findSiteConfig(site) {
+  return getSiteConfigs().find((s) => s.url === site) || null;
+}
+
+/**
+ * 据永久地址尝试自动切换站点线路。返回 { attempted, switched, reason?, oldUrl?, newUrl?, label? }。
+ * opts.force 可绕过冷却期（供手动接口立即触发），并发锁 failoverRunning 始终生效。
+ * 该函数可能较慢（启动无头浏览器渲染），由调用方决定是否阻塞。
+ */
+async function autoFailover(siteCfg, opts = {}) {
+  if (!siteCfg || !siteCfg.permanentUrl) return { attempted: false, reason: '未配置永久地址' };
+  if (failoverRunning) return { attempted: false, reason: '已有切换任务进行中' };
+  if (!opts.force && Date.now() - failoverLastAttempt < FAILOVER_COOLDOWN_MS) {
+    return { attempted: false, reason: '处于冷却期' };
+  }
+  failoverRunning = true;
+  failoverLastAttempt = Date.now();
+  const oldUrl = siteCfg.url;
+  try {
+    const resolved = await permanentResolver.resolveSiteLine(siteCfg);
+    if (!resolved) return { attempted: true, switched: false, reason: '永久页各线路均不可达' };
+    if (resolved.lineUrl === oldUrl) return { attempted: true, switched: false, reason: '已是该线路' };
+    siteCfg.url = resolved.lineUrl;
+    saveSiteConfigs(getSiteConfigs());
+    reloadSites();
+    siteBreaker.recordSuccess(oldUrl);
+    warnSiteFailure(oldUrl, `网址失效，已自动切换${resolved.label} → ${resolved.lineUrl}`);
+    return { attempted: true, switched: true, oldUrl, newUrl: resolved.lineUrl, label: resolved.label };
+  } catch (e) {
+    warnSiteFailure(oldUrl, `自动切换失败: ${e.message || e}`);
+    return { attempted: true, switched: false, reason: e.message || String(e) };
+  } finally {
+    failoverRunning = false;
+  }
+}
+
+/** 熔断/失效钩子：站点失效时后台触发自动切换（不阻塞当前抓取），结果在下一轮同步生效。 */
+function triggerAutoFailover(site) {
+  const cfg = findSiteConfig(site);
+  if (!cfg || !cfg.permanentUrl) return;
+  autoFailover(cfg)
+    .then((r) => {
+      if (r && r.switched) console.warn(`\x1b[33m[永久地址] ${cfg.name} 已切换：${r.label} → ${r.newUrl}\x1b[0m`);
+      else if (r && r.attempted) console.warn(`\x1b[33m[永久地址] ${cfg.name} 本次未切换（${r.reason}）\x1b[0m`);
+    })
+    .catch((e) => console.warn(`\x1b[33m[永久地址] ${cfg.name} 自动切换异常: ${e.message || e}\x1b[0m`));
+}
 
 // 站点失效时向控制台输出黄色告警，并记入本轮失败列表（结束时写入 crawl-failures.json）
 let gFailures = null;
@@ -772,6 +852,7 @@ async function mapAllSites(taskFn, log) {
       if (newlyTripped) {
         log(`  [${site}] 断路器已熔断（连续失败）`);
         warnSiteFailure(site, `连续失败达阈值，已熔断跳过（${formatRequestError(err)}）`);
+        triggerAutoFailover(site);
       } else {
         warnSiteFailure(site, formatRequestError(err));
       }
@@ -901,6 +982,7 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null) 
             log(`  [${site}] 第 ${pageNum} 页失败: ${formatRequestError(err)}${newlyTripped ? '（断路器已熔断）' : ''}`);
             if (newlyTripped) {
               warnSiteFailure(site, `连续失败达阈值，已熔断跳过（${formatRequestError(err)}）`);
+              triggerAutoFailover(site);
             } else {
               warnSiteFailure(site, `第 ${pageNum} 页: ${formatRequestError(err)}`);
             }
@@ -1291,4 +1373,5 @@ module.exports = {
   UA,
   getSiteConfigs, getSites, getBaseUrl,
   setFailureLogPath, flushFailureReport, formatRequestError,
+  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig,
 };

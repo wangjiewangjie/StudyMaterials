@@ -74,6 +74,8 @@ export default function SyncCenterView({
         key: s.url,
         name: s.name || s.url,
         url: s.url,
+        permanentUrl: s.permanentUrl,
+        permanentLabel: s.permanentLabel,
         count: siteCounts.get(s.url) || 0,
       }));
   }, [sites, siteCounts]);
@@ -235,6 +237,11 @@ export default function SyncCenterView({
                       <div className="min-w-0">
                         <div className="text-sm font-bold text-white truncate">{src.name}</div>
                         <div className="text-[10px] text-ph-text-muted font-mono truncate">{src.url}</div>
+                      {src.permanentUrl && (
+                        <div className="text-[10px] text-ph-text-tertiary font-mono truncate" title={`失效时可据永久发布页（${src.permanentLabel || ''}）更新 url`}>
+                          永久地址：{src.permanentUrl}{src.permanentLabel ? `（${src.permanentLabel}）` : ''}
+                        </div>
+                      )}
                       </div>
                     </div>
                     <Badge status="success" text={<span className="text-[10px] font-black text-emerald-400">在线</span>} />

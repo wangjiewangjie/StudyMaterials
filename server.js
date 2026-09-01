@@ -10,7 +10,8 @@ const os = require('os');
 const axios = require('axios');
 const { EventEmitter } = require('events');
 const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
-  getSiteConfigs, getSites, getBaseUrl, setFailureLogPath, flushFailureReport, formatRequestError } = require('./crawler');
+  getSiteConfigs, getSites, getBaseUrl, setFailureLogPath, flushFailureReport, formatRequestError,
+  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig } = require('./crawler');
 const { decryptBuffer, resetDecrypt, ensureDecryptReady } = require('./image-decrypt');
 const { normalizeUpstreamUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
@@ -397,6 +398,28 @@ app.get('/proxy/*', async (req, res) => {
 // 站点配置（output/sites.json）
 app.get('/api/sites', (req, res) => {
   res.json({ sites: getSiteConfigs() });
+});
+
+// 手动触发永久地址切换：body 可带 { name } 指定站点；不带则切换所有配置了 permanentUrl 的站点。
+// 无头浏览器渲染永久页可能要数秒，故不使用阻塞式 await 会超时，这里等待并返回每一站结果。
+app.post('/api/sites/failover', async (req, res) => {
+  try {
+    const { name } = (req.body && typeof req.body === 'object') ? req.body : {};
+    const targets = getSiteConfigs().filter((s) => s.permanentUrl && (!name || s.name === name));
+    const results = [];
+    for (const cfg of targets) {
+      const r = await autoFailover(cfg, { force: true }); // 手动触发立即执行，不受冷却限制
+      results.push({
+        name: cfg.name,
+        permanentUrl: cfg.permanentUrl,
+        currentUrl: (findSiteConfig(cfg.url) || {}).url || cfg.url,
+        ...r,
+      });
+    }
+    res.json({ ok: true, matched: targets.length, results });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
 });
 
 /** 可播放且未命中排除词的视频 */
