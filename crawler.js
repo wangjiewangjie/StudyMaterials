@@ -15,6 +15,7 @@ const { matchesExclude, filterExcluded } = require('./lib/exclude');
 const { isPromoDetailText } = require('./lib/detail-noise');
 const { writeFailureReport, setFailureLogPath } = require('./lib/crawl-failure-log');
 const permanentResolver = require('./lib/permanent-resolve');
+const { DATA_DIR } = require('./lib/paths');
 
 // 站点项：{ url, name, todayPath, enabled, archiveSuffix?, permanentUrl?, permanentLabel?, lines? }
 //   permanentUrl   可选：站点「永久地址/发布页」。当前 url 失效时，渲染永久页取「线路一」
@@ -25,7 +26,7 @@ const permanentResolver = require('./lib/permanent-resolve');
 //   91吃瓜 https://91cg.asia/ · 91视频 https://sjahkniw.cc/ · 51fans https://fans51.com/
 //   51视频 https://jccbgvjtj.cc/ · 51吃瓜 https://51cg800.com/ · 51爆料 https://51bl.info/
 //   吃瓜网 https://cgw48.com/ · 每日大赛 https://mrdsk.com/ · 黑料不打烊 https://hlbdy27.com/
-const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
+const SITES_PATH = path.join(DATA_DIR, 'sites.json');
 const DEFAULT_SITE_CONFIGS = [
   {
     url: 'https://age.nuxaojbu.cc/', name: '91吃瓜', todayPath: '/category/zxcghl/',
@@ -368,7 +369,7 @@ async function autoFailover(siteCfg, opts = {}) {
     siteBreaker.recordSuccess(oldUrl);
     // 同步改写正式索引中的旧域名（若存在）
     try {
-      const remapped = remapIndexSiteUrls(path.join(__dirname, 'output', 'index.json'), oldUrl, newUrl);
+      const remapped = remapIndexSiteUrls(path.join(DATA_DIR, 'index.json'), oldUrl, newUrl);
       if (remapped > 0) {
         console.warn(`\x1b[33m[永久地址] ${siteCfg.name} 已回写索引 siteUrl ${remapped} 条\x1b[0m`);
       }

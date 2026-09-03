@@ -30,6 +30,7 @@ export function useAppData(message) {
   const [listError, setListError] = useState(null);
   const [listVersion, setListVersion] = useState(0);
   const [isBootstrapped, setIsBootstrapped] = useState(false);
+  const videosReqIdRef = useRef(0);
 
   const loadSites = useCallback(async () => {
     try {
@@ -45,29 +46,34 @@ export function useAppData(message) {
       const data = await fetchTags();
       setTagList(data.tags || []);
     } catch {
-      setTagList([]);
+      // 静默失败时保留旧标签，避免筛选条闪断导致布局跳动
     }
   }, []);
 
   const loadVideos = useCallback(async (q, opts = {}) => {
     const silent = !!opts.silent;
+    const reqId = ++videosReqIdRef.current;
     if (!silent) {
       setIsLoadingList(true);
       setListError(null);
     }
     try {
       const data = await fetchVideos(q);
+      if (reqId !== videosReqIdRef.current) return;
       setItems(data.items || []);
       if (!silent) setListVersion((v) => v + 1);
       loadTags();
     } catch (error) {
       if (isAbortError(error)) return;
+      if (reqId !== videosReqIdRef.current) return;
       if (!silent) {
         setListError(error.message || '加载失败');
         messageRef.current?.error(`加载失败：${error.message}`);
       }
     } finally {
-      if (!silent) setIsLoadingList(false);
+      if (!silent && reqId === videosReqIdRef.current) {
+        setIsLoadingList(false);
+      }
     }
   }, [loadTags]);
 

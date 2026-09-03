@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 
-const portFile = path.resolve(__dirname, '..', '.server-port');
+const portFile = path.resolve(__dirname, '..', 'output', '.server-port');
 const backendPort = fs.existsSync(portFile)
   ? parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10) || 9999
   : 9999;

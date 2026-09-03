@@ -27,6 +27,99 @@ function logPlayer(...args) {
   console.error('[VideoPlayer]', ...args);
 }
 
+/**
+ * 恢复续播进度。HLS 在 MANIFEST_PARSED 时 duration 往往还是 NaN/0，
+ * 不能只在 onReady 里判断一次；需等 loadedmetadata / durationchange 再 seek。
+ */
+function restoreWatchProgress(art, itemId) {
+  const saved = loadWatchTime(itemId);
+  if (!(saved > 5) || !art) return;
+
+  let done = false;
+  const timers = [];
+
+  const finish = () => {
+    done = true;
+    timers.forEach((t) => clearTimeout(t));
+    const video = art.video;
+    if (video && video._vpRestoreHandlers) {
+      for (const [evt, fn] of video._vpRestoreHandlers) {
+        video.removeEventListener(evt, fn);
+      }
+      video._vpRestoreHandlers = null;
+    }
+  };
+
+  const trySeek = () => {
+    if (done) return;
+    if (!art || art.destroyed) {
+      finish();
+      return;
+    }
+
+    const video = art.video;
+    const dur = Number(art.duration) || Number(video && video.duration) || 0;
+    const durReady = Number.isFinite(dur) && dur > 0;
+
+    // 已到片尾附近：不跳
+    if (durReady && saved >= dur - 5) {
+      finish();
+      return;
+    }
+
+    try {
+      // 优先走 video 元素，HLS 对 currentTime 更敏感
+      if (video) video.currentTime = saved;
+      art.currentTime = saved;
+    } catch (e) {
+      logPlayer('恢复进度失败', e && e.message);
+      return;
+    }
+
+    // duration 已知才算真正完成；未知则继续等事件
+    if (durReady) {
+      const now = Number(video && video.currentTime) || Number(art.currentTime) || 0;
+      // 允许关键切片对齐误差
+      if (Math.abs(now - saved) < 15 || now >= saved - 2) {
+        logPlayer('已恢复进度', { id: itemId, time: saved, at: now, duration: dur });
+        finish();
+      }
+    }
+  };
+
+  const video = art.video;
+  if (video) {
+    const handlers = [
+      ['loadedmetadata', trySeek],
+      ['durationchange', trySeek],
+      ['canplay', trySeek],
+    ];
+    video._vpRestoreHandlers = handlers;
+    for (const [evt, fn] of handlers) {
+      video.addEventListener(evt, fn);
+    }
+  }
+
+  trySeek();
+  timers.push(setTimeout(trySeek, 200));
+  timers.push(setTimeout(trySeek, 800));
+  timers.push(setTimeout(trySeek, 2000));
+  timers.push(setTimeout(finish, 5000));
+
+  // HLS：分片/level 加载后再 seek 一次更稳
+  if (art.hls && typeof art.hls.on === 'function') {
+    const onHls = () => trySeek();
+    try {
+      art.hls.on(Hls.Events.LEVEL_LOADED, onHls);
+      art.hls.on(Hls.Events.FRAG_CHANGED, onHls);
+    } catch { /* ignore */ }
+  }
+
+  if (typeof art.on === 'function') {
+    art.on('destroy', finish);
+  }
+}
+
 // 销毁前彻底停掉上一个实例，避免音频叠加 / MediaSource 泄漏
 function stopVideoElement(video) {
   if (!video) return;
@@ -77,6 +170,64 @@ function clearContainer(container) {
     }
     container.innerHTML = '';
   } catch { /* ignore */ }
+}
+
+/**
+ * Artplayer 在「网页全屏」下点「全屏」只会先退出网页全屏。
+ * 拦截全屏按钮：退出网页全屏后立刻进入系统全屏，一步到位。
+ */
+function patchFullscreenOneStep(art) {
+  if (!art || typeof art.on !== 'function') return;
+  let bridging = false;
+  let fallbackTimer = 0;
+
+  const enterNativeFs = () => {
+    bridging = false;
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = 0;
+    }
+    try {
+      if (!art.fullscreen) art.fullscreen = true;
+    } catch { /* ignore */ }
+  };
+
+  art.on('fullscreenWeb', (state) => {
+    if (state || !bridging) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(enterNativeFs);
+    });
+  });
+
+  const root = art.template?.$player || art.template?.$container;
+  if (!root || typeof root.addEventListener !== 'function') return;
+
+  const onClickCapture = (e) => {
+    const el = e.target;
+    if (!el || typeof el.closest !== 'function') return;
+    const btn = el.closest(
+      '.art-control-fullscreen, .art-icon-fullscreen, [aria-label="全屏"], [aria-label="Fullscreen"]',
+    );
+    if (!btn) return;
+    if (!art.fullscreenWeb || art.fullscreen) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    bridging = true;
+    try {
+      art.fullscreenWeb = false;
+    } catch {
+      bridging = false;
+      return;
+    }
+    fallbackTimer = window.setTimeout(enterNativeFs, 120);
+  };
+
+  root.addEventListener('click', onClickCapture, true);
+  art.on('destroy', () => {
+    root.removeEventListener('click', onClickCapture, true);
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+  });
 }
 
 // ---------- 播放器 UI 状态机 ----------
@@ -268,6 +419,7 @@ function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
     },
   });
 
+  patchFullscreenOneStep(art);
   return art;
 }
 
@@ -403,12 +555,8 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
             if (gen !== loadGenRef.current) return;
             clearWatchdog();
 
-            // 恢复上次播放进度
-            const saved = loadWatchTime(item.id);
-            if (saved > 5 && art.duration && saved < art.duration - 5) {
-              try { art.currentTime = saved; } catch { /* ignore */ }
-              logPlayer('已恢复进度', { id: item.id, time: saved });
-            }
+            // 恢复上次播放进度（HLS duration 可能稍后才就绪）
+            restoreWatchProgress(art, item.id);
 
             setPhase('ready');
             if (!autoplay && !isFallback) return;

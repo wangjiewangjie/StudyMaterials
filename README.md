@@ -12,9 +12,11 @@
 
 ---
 
-## 第一次使用（按顺序做）
+# 第一次使用（开发者 / 命令行）
 
-下面以 **Windows** 为主说明。Mac / Linux 命令类似，差异会单独标出。
+下面以 **Windows** 为主说明。若只想给别人用、自己不想装 Node，请看文末「打包成桌面应用」。
+
+Mac / Linux 命令类似，差异会单独标出。
 
 ### 第 1 步：安装 Node.js
 
@@ -237,7 +239,9 @@ npm run crawl -- --pages 1-5 --limit 20
 
 ## 数据存在哪
 
-都在项目下的 `output/` 目录（该目录不会提交到 Git）：
+**命令行方式（`npm start`）**：项目下的 `output/` 目录。
+
+**桌面安装包**：用户数据目录（Windows 一般在 `%APPDATA%\学习资料\output\`），卸载应用不会自动删除这些数据。
 
 | 文件 | 内容 |
 |------|------|
@@ -248,12 +252,46 @@ npm run crawl -- --pages 1-5 --limit 20
 
 ---
 
+## 打包成桌面应用（免安装 Node）
+
+开发者在本机装好 Node 后，可打出 Windows 安装包 / 绿色版，发给没有 Node 的用户：
+
+```bash
+# 国内网络建议先设镜像，再打包
+set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
+npm install
+npm run dist
+```
+
+产物在 `dist-electron/`：
+
+| 文件 | 说明 |
+|------|------|
+| `学习资料 Setup x.x.x.exe` | 安装向导（开始菜单 + 桌面快捷方式） |
+| `学习资料 x.x.x.exe` | 绿色便携版，双击即可 |
+
+本地先验证桌面窗口（不打包）：
+
+```bash
+npm run build
+npm run electron
+```
+
+> 永久地址自动切换仍依赖系统已安装的 Chrome 或 Edge（与网页版相同）。  
+> 打包前会执行 `npm run icons`，用 `frontend/public/logo.svg` 生成桌面图标（需本机有 Chrome/Edge）。  
+> 若打包时报 winCodeSign / 符号链接权限错误：打开 Windows「开发人员模式」，或保持 `package.json` 里 `build.win.signAndEditExecutable` 为 `false`（当前默认）。
+
+---
+
 ## 常用命令
 
 | 命令 | 作用 |
 |------|------|
 | `npm install` | 安装依赖（含前端） |
 | `npm start` | 启动服务，浏览器打开提示的地址 |
+| `npm run electron` | 以桌面窗口启动（需已 build 前端） |
+| `npm run dist` | 打包 Windows 安装包 + 绿色版 |
 | `npm run build` | 重新打包前端 |
 | `npm run dev` | 前端开发热更新 |
 | `npm run crawl -- …` | 命令行爬取 |

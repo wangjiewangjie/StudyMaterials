@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 
 /**
- * 现代视频站风格标签栏：
- * 横向滑动、左右箭头（text 样式）、边缘渐隐、选中项滚入视野、拖拽/滚轮横滑。
+ * 横向标签栏（由首页 sticky 栈统一固定，本组件只负责内容）。
  */
 export default function TagFilterBar({ tags = [], activeTag = '', onTagChange }) {
   const scrollerRef = useRef(null);
@@ -56,7 +55,6 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
   };
 
   const selectTag = (tag) => {
-    // 拖拽横滑时不触发筛选
     if (dragRef.current.moved) return;
     onTagChange(tag);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -80,41 +78,25 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
     const el = scrollerRef.current;
     if (!el) return;
     const dx = e.clientX - dragRef.current.startX;
-    if (Math.abs(dx) <= 4) return;
-    if (!dragRef.current.moved) {
-      dragRef.current.moved = true;
-      el.classList.add('is-dragging');
-      // 确认拖拽后再捕获指针，避免拦截标签 click
-      try { el.setPointerCapture(dragRef.current.pointerId); } catch (_) { /* ignore */ }
-    }
+    if (Math.abs(dx) > 4) dragRef.current.moved = true;
     el.scrollLeft = dragRef.current.scrollLeft - dx;
   };
 
   const endDrag = (e) => {
-    if (!dragRef.current.active) return;
     const el = scrollerRef.current;
-    const wasDragging = dragRef.current.moved;
+    if (!el || !dragRef.current.active) return;
     dragRef.current.active = false;
-    if (el) {
-      el.classList.remove('is-dragging');
-      if (wasDragging) {
-        try { el.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
-      }
-    }
-    if (wasDragging) {
-      window.setTimeout(() => { dragRef.current.moved = false; }, 50);
-    } else {
-      dragRef.current.moved = false;
-    }
+    try {
+      if (e?.pointerId != null) el.releasePointerCapture?.(e.pointerId);
+    } catch { /* ignore */ }
   };
 
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return undefined;
     const onWheel = (e) => {
-      // 仅按住 Shift 时把纵向滚轮转为横向，避免挡住页面滚动
-      if (!e.shiftKey) return;
       if (el.scrollWidth <= el.clientWidth) return;
+      if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
       e.preventDefault();
       el.scrollLeft += e.deltaY;
     };
@@ -130,7 +112,7 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
   ];
 
   return (
-    <div className="home-filter-bar sticky top-16 z-[190] bg-ph-header/95 backdrop-blur-xl border-b border-white/10">
+    <div className="home-filter-bar border-b border-white/10">
       <div className="tag-bar max-w-7xl mx-auto px-1 sm:px-4 lg:px-6 relative">
         <button
           type="button"

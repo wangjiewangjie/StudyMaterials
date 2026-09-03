@@ -25,7 +25,7 @@ export default function AppHeader({
   const syncDisabled = isBusy;
 
   return (
-    <header className="app-header sticky top-0 z-[200] w-full backdrop-blur-md bg-ph-header/90 border-b border-white/5">
+    <header className="app-header">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         <Button
           type="text"

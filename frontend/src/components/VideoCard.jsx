@@ -1,4 +1,4 @@
-import { useState, useCallback, memo } from 'react';
+import { useState, useCallback, memo, useRef } from 'react';
 import { Tag } from 'antd';
 import {
   StarOutlined, StarFilled, PlayCircleFilled, PictureOutlined, LoadingOutlined,
@@ -15,6 +15,8 @@ function VideoCardBase({
   const [imgOk, setImgOk] = useState(!!thumb);
   const watch = loadWatchProgress(item.id);
   const progressPct = watch.percent;
+  // 入场动画只在首次挂载时播一次；同步刷新改 index 时不再重播，避免列表「闪回顶部」
+  const enterDelayRef = useRef(`${Math.min(index, 12) * 28}ms`);
 
   const handleClick = useCallback(() => onClick(item), [item, onClick]);
   const handleFav = useCallback((e) => {
@@ -42,7 +44,7 @@ function VideoCardBase({
       tabIndex={0}
       aria-label={`${item.title || `条目 ${item.id}`}${hasVideo ? '，可播放' : '，无法播放'}`}
       className="video-card group overflow-hidden rounded bg-ph-card border border-white/5 cursor-pointer focus-visible:border-ph-orange focus-visible:outline-none rise-in card-scale hover:border-white/15 transition-colors"
-      style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
+      style={{ animationDelay: enterDelayRef.current }}
       onClick={handleClick}
       onKeyDown={handleKey}
     >

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Spin, Empty, Typography, Row, Col, Button, Segmented } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import VideoCard from '../components/VideoCard.jsx';
@@ -37,6 +38,55 @@ function SkeletonGrid({ count = 12 }) {
   );
 }
 
+function HomeStickyChrome({
+  showTags,
+  showToolbar,
+  tagList,
+  activeTag,
+  onTagChange,
+  pagedLength,
+  total,
+  sort,
+  onSortChange,
+}) {
+  const chrome = (
+    <div className="home-sticky-stack">
+      {showTags ? (
+        <TagFilterBar
+          tags={tagList}
+          activeTag={activeTag}
+          onTagChange={onTagChange}
+        />
+      ) : null}
+      {showToolbar ? (
+        <div className="home-toolbar">
+          <div className="toolbar-meta home-toolbar-inner">
+            <span className="home-toolbar-meta-text">
+              {activeTag ? (
+                <>标签 <strong>#{activeTag}</strong> · </>
+              ) : null}
+              已显示 <strong>{pagedLength}</strong> / 共 <strong>{total}</strong> 条
+            </span>
+            <Segmented
+              size="middle"
+              options={HOME_SORT_OPTIONS}
+              value={sort}
+              onChange={onSortChange}
+              className="!bg-ph-panelAlt shrink-0"
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // 挂到 body，避开任何祖先 transform / overflow 对 fixed 的干扰
+  if (typeof document !== 'undefined') {
+    return createPortal(chrome, document.body);
+  }
+  return chrome;
+}
+
 export default function HomeView({
   items,
   favIds,
@@ -72,110 +122,108 @@ export default function HomeView({
     [activeTag, listVersion, sort],
   );
 
+  const showTags = items.length > 0 && tagList.length > 0;
+  const showToolbar = !isLoadingList && filtered.length > 0;
+  const stickyMode = showTags && showToolbar ? 'both' : showTags ? 'tags' : showToolbar ? 'toolbar' : '';
+
   return (
-    <PageShell home>
-      {items.length > 0 && tagList.length > 0 ? (
-        <TagFilterBar
-          tags={tagList}
+    <>
+      {stickyMode ? (
+        <HomeStickyChrome
+          showTags={showTags}
+          showToolbar={showToolbar}
+          tagList={tagList}
           activeTag={activeTag}
           onTagChange={onTagChange}
+          pagedLength={paged.length}
+          total={total}
+          sort={sort}
+          onSortChange={setSort}
         />
       ) : null}
 
-      <div className="home-page-body">
-        {!isLoadingList && filtered.length > 0 && (
-          <div className="toolbar-meta mb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <span>
-              {activeTag ? (
-                <>标签 <strong>#{activeTag}</strong> · </>
-              ) : null}
-              已显示 <strong>{paged.length}</strong> / 共 <strong>{total}</strong> 条
-            </span>
-            <Segmented
-              size="middle"
-              options={HOME_SORT_OPTIONS}
-              value={sort}
-              onChange={setSort}
-              className="!bg-ph-panelAlt self-start sm:self-auto"
-            />
-          </div>
-        )}
+      <PageShell home>
+        {stickyMode ? (
+          <div className={`home-sticky-spacer is-${stickyMode}`} aria-hidden />
+        ) : null}
 
-        {isLoadingList && items.length === 0 && <SkeletonGrid />}
+        <div className="home-page-body">
+          {isLoadingList && items.length === 0 && <SkeletonGrid />}
 
-        {!isLoadingList && listError && items.length === 0 && (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={
-              <Text type="secondary" className="!text-ph-text-tertiary">
-                加载失败：{listError}
-              </Text>
-            }
-            className="!py-20 rise-in home-empty"
-          >
-            <Button
-              type="primary"
-              icon={<ReloadOutlined />}
-              onClick={onRetry}
-              className="!bg-ph-orange !border-0 !text-black !font-bold"
+          {!isLoadingList && listError && items.length === 0 && (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                <Text type="secondary" className="!text-ph-text-tertiary">
+                  加载失败：{listError}
+                </Text>
+              }
+              className="!py-20 rise-in home-empty"
             >
-              重试
-            </Button>
-          </Empty>
-        )}
+              <Button
+                type="primary"
+                icon={<ReloadOutlined />}
+                onClick={onRetry}
+                className="!bg-ph-orange !border-0 !text-black !font-bold"
+              >
+                重试
+              </Button>
+            </Empty>
+          )}
 
-        {!(isLoadingList && items.length === 0) && !(listError && items.length === 0) && (
-          <Spin spinning={isLoadingList && items.length > 0} tip="正在加载…">
-            {filtered.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  <Text type="secondary" className="!text-ph-text-tertiary">
-                    {activeTag
-                      ? `当前标签「${activeTag}」下没有内容，试试切换其他标签`
-                      : '资料库还是空的。点击右上角「同步」按钮抓取最新内容'}
-                  </Text>
-                }
-                className="!py-20 rise-in home-empty"
-              />
-            ) : (
-              <>
-                <Row gutter={CARD_GUTTER}>
-                  {paged.map((item, i) => (
-                    <Col key={item.id} {...CARD_RESPONSIVE} className="mb-3 sm:mb-5">
-                      <VideoCard
-                        item={item}
-                        index={i}
-                        onClick={onCardClick}
-                        isFavorited={favIds.has(item.id)}
-                        isFavPending={pendingFavIds?.has(item.id)}
-                        onToggleFavorite={onToggleFavorite}
-                        siteName={resolveSiteName(item.siteUrl, siteNameMap)}
-                      />
-                    </Col>
-                  ))}
-                </Row>
-                {hasMore ? (
-                  <div ref={sentinelRef} className="flex justify-center py-6">
-                    <Button
-                      type="default"
-                      onClick={loadMore}
-                      className="!font-bold !bg-white/5 !border-white/10 !text-ph-text-secondary hover:!text-ph-orange hover:!border-ph-orange/40"
-                    >
-                      加载更多（还有 {total - paged.length} 条）
-                    </Button>
-                  </div>
-                ) : null}
-                {!hasMore && total > PAGE_SIZE ? (
-                  <p className="text-center text-xs text-ph-text-tertiary py-6 m-0">
-                    已全部加载 · 共 {total} 条
-                  </p>
-                ) : null}
-              </>
-            )}
-          </Spin>
-        )}
-      </div>
-    </PageShell>
+          {!(isLoadingList && items.length === 0) && !(listError && items.length === 0) && (
+            <Spin spinning={isLoadingList && items.length > 0} tip="正在加载…">
+              {filtered.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={
+                    <Text type="secondary" className="!text-ph-text-tertiary">
+                      {activeTag
+                        ? `当前标签「${activeTag}」下没有内容，试试切换其他标签`
+                        : '资料库还是空的。点击右上角「同步」按钮抓取最新内容'}
+                    </Text>
+                  }
+                  className="!py-20 rise-in home-empty"
+                />
+              ) : (
+                <>
+                  <Row gutter={CARD_GUTTER}>
+                    {paged.map((item, i) => (
+                      <Col key={item.id} {...CARD_RESPONSIVE} className="mb-3 sm:mb-5">
+                        <VideoCard
+                          item={item}
+                          index={i}
+                          onClick={onCardClick}
+                          isFavorited={favIds.has(item.id)}
+                          isFavPending={pendingFavIds?.has(item.id)}
+                          onToggleFavorite={onToggleFavorite}
+                          siteName={resolveSiteName(item.siteUrl, siteNameMap)}
+                        />
+                      </Col>
+                    ))}
+                  </Row>
+                  {hasMore ? (
+                    <div ref={sentinelRef} className="flex justify-center py-6">
+                      <Button
+                        type="default"
+                        onClick={loadMore}
+                        className="!font-bold !bg-white/5 !border-white/10 !text-ph-text-secondary hover:!text-ph-orange hover:!border-ph-orange/40"
+                      >
+                        加载更多（还有 {total - paged.length} 条）
+                      </Button>
+                    </div>
+                  ) : null}
+                  {!hasMore && total > PAGE_SIZE ? (
+                    <p className="text-center text-xs text-ph-text-tertiary py-6 m-0">
+                      已全部加载 · 共 {total} 条
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </Spin>
+          )}
+        </div>
+      </PageShell>
+    </>
   );
 }

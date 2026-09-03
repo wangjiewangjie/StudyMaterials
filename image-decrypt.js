@@ -7,8 +7,10 @@ const path = require('path');
 const axios = require('axios');
 const CryptoJS = require('crypto-js');
 
+const { DATA_DIR } = require('./lib/paths');
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-const ZZZ_CACHE = path.join(__dirname, 'output', 'zzz.js.cache');
+const ZZZ_CACHE = path.join(DATA_DIR, 'zzz.js.cache');
 const FALLBACK_BASES = [
   'https://age.nuxaojbu.cc',
   'https://je8vz1.zplaojtx.cc',

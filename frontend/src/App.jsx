@@ -8,7 +8,7 @@ import BackTop from './components/BackTop.jsx';
 import { useAppData } from './hooks/useAppData.js';
 import { useSync } from './hooks/useSync.js';
 import { downloadFavorites } from './services/api.js';
-import { SYNC_MODAL_AUTO_CLOSE_MS, DETAIL_NOT_FOUND_MS } from './constants/timing.js';
+import { SYNC_MODAL_AUTO_CLOSE_MS, DETAIL_NOT_FOUND_MS, SYNC_BATCH_REFRESH_MS } from './constants/timing.js';
 
 const HomeView = lazy(() => import('./views/HomeView.jsx'));
 const DetailView = lazy(() => import('./views/DetailView.jsx'));
@@ -67,6 +67,9 @@ export default function App() {
   const scrollRef = useRef({});
   const itemsRef = useRef([]);
   const favoritesRef = useRef([]);
+  const batchRefreshTimerRef = useRef(0);
+  const preserveScrollRef = useRef(false);
+  const savedScrollYRef = useRef(0);
 
   const {
     items,
@@ -89,13 +92,41 @@ export default function App() {
   itemsRef.current = items;
   favoritesRef.current = favorites;
 
+  const markPreserveScroll = useCallback(() => {
+    savedScrollYRef.current = window.scrollY;
+    preserveScrollRef.current = true;
+  }, []);
+
   const handleSyncDone = useCallback(() => {
-    loadVideos(query.trim());
-  }, [loadVideos, query]);
+    // 静默刷新：不 bump listVersion，避免分页重置把滚动打回顶部
+    markPreserveScroll();
+    loadVideos(query.trim(), { silent: true });
+  }, [loadVideos, query, markPreserveScroll]);
 
   const handleSyncBatch = useCallback(() => {
-    loadVideos(query.trim(), { silent: true });
-  }, [loadVideos, query]);
+    if (batchRefreshTimerRef.current) {
+      clearTimeout(batchRefreshTimerRef.current);
+    }
+    batchRefreshTimerRef.current = window.setTimeout(() => {
+      batchRefreshTimerRef.current = 0;
+      markPreserveScroll();
+      loadVideos(query.trim(), { silent: true });
+    }, SYNC_BATCH_REFRESH_MS);
+  }, [loadVideos, query, markPreserveScroll]);
+
+  useEffect(() => () => {
+    if (batchRefreshTimerRef.current) {
+      clearTimeout(batchRefreshTimerRef.current);
+      batchRefreshTimerRef.current = 0;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!preserveScrollRef.current) return;
+    preserveScrollRef.current = false;
+    const y = savedScrollYRef.current;
+    if (y > 0) window.scrollTo({ top: y, behavior: 'auto' });
+  }, [items, location.pathname]);
 
   const {
     isSyncing,
@@ -267,7 +298,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="app-shell min-h-screen">
+      <div className="app-shell min-h-screen pt-16">
         <AppHeader
           query={query}
           onQueryChange={setQuery}

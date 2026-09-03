@@ -19,10 +19,12 @@ const { filterExcludedArticles } = require('./lib/exclude');
 const { sanitizeDetailBlocks, sanitizeDetailContent } = require('./lib/detail-noise');
 const { createSyncLogger } = require('./lib/sync-logger');
 const permanentResolver = require('./lib/permanent-resolve');
+const { APP_ROOT, DATA_DIR, ensureDataDir } = require('./lib/paths');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
-const PORT_FILE = path.join(__dirname, '.server-port');
-const MEDIA_CACHE_DIR = path.join(__dirname, 'output', 'media-cache');
+const OUT_DIR = DATA_DIR;
+const PORT_FILE = path.join(OUT_DIR, '.server-port');
+const MEDIA_CACHE_DIR = path.join(OUT_DIR, 'media-cache');
 
 /** 本机局域网 IPv4（排除回环与内部虚拟网卡） */
 function getLocalIPv4() {
@@ -53,13 +55,13 @@ function findAvailablePort(startPort) {
     });
   });
 }
-const OUT_DIR = path.resolve(__dirname, 'output');
+ensureDataDir();
 setFailureLogPath(path.join(OUT_DIR, 'crawl-failures.json'));
 const SYNC_LOG_PATH = path.join(OUT_DIR, 'sync-log.json');
 const JSON_PATH = path.join(OUT_DIR, 'index.json');
 const FAV_PATH = path.join(OUT_DIR, 'favorites.json');
 const FIXED_TAGS_PATH = defaultFixedPath(OUT_DIR);
-const BUILD_DIR = path.join(__dirname, 'public', 'build');
+const BUILD_DIR = path.join(APP_ROOT, 'public', 'build');
 const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS, 10) || 90000;
 const REFRESH_TIMEOUT_MS = parseInt(process.env.REFRESH_TIMEOUT_MS, 10) || 60000;
 
@@ -1135,11 +1137,77 @@ app.use((err, req, res, _next) => {
   res.status(status).json({ error: err.message || '内部错误' });
 });
 
-(async () => {
-  const port = await findAvailablePort(BASE_PORT);
-  fs.writeFileSync(PORT_FILE, String(port));
+let httpServer = null;
+let startPromise = null;
 
-  app.listen(port, '0.0.0.0', () => {
+function startBackgroundCrawl() {
+  (async () => {
+    const t0 = Date.now();
+    const formatElapsed = (ms) => {
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    };
+    const timer = setInterval(() => {
+      process.stdout.write(`\r  后台同步中… 已运行 ${formatElapsed(Date.now() - t0)}   `);
+    }, 1000);
+    if (typeof timer.unref === 'function') timer.unref();
+    syncLogger.info('startup-bg', '后台同步启动', { minPerSite: 50, concurrency: 12 });
+    try {
+      // merge 模式：避免 replace 中途崩溃把整库裁成仅本轮结果
+      await withIndexLock(() => crawl({
+        minPerSite: 50,
+        replace: false,
+        outDir: OUT_DIR,
+        jsonPath: JSON_PATH,
+        concurrency: 12,
+        pushEvery: 10,
+        onBatch: () => { onIndexChanged(); },
+        onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
+        onLog: makeOnLog('startup-bg', null),
+        failureScope: 'startup-bg',
+      }));
+      onIndexChanged();
+      clearInterval(timer);
+      process.stdout.write('\n');
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s\n`);
+      syncLogger.info('startup-bg', '后台同步完成', { total: getIndex().length, sec });
+      syncLogger.flush();
+    } catch (e) {
+      clearInterval(timer);
+      process.stdout.write('\n');
+      flushFailureReport({ scope: 'startup-bg', fatal: formatRequestError(e), elapsedMs: Date.now() - t0 });
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+      console.warn(`  同步失败（耗时 ${sec}s）:`, formatRequestError(e));
+      syncLogger.error('startup-bg', '后台同步失败: ' + e.message);
+      syncLogger.flush();
+    }
+  })();
+}
+
+/** 启动 HTTP 服务；可被 Electron 主进程复用。返回 { port, server } */
+async function startServer(options = {}) {
+  const {
+    backgroundCrawl = true,
+    installSignalHandlers = false,
+  } = options;
+
+  if (httpServer) {
+    const addr = httpServer.address();
+    return { port: addr && addr.port, server: httpServer };
+  }
+  if (startPromise) return startPromise;
+
+  startPromise = (async () => {
+    ensureDataDir();
+    const port = await findAvailablePort(BASE_PORT);
+    fs.writeFileSync(PORT_FILE, String(port));
+
+    await new Promise((resolve, reject) => {
+      httpServer = app.listen(port, '0.0.0.0', () => resolve());
+      httpServer.once('error', reject);
+    });
+
     const lanIps = getLocalIPv4();
     console.log('');
     console.log('  学习资料已启动');
@@ -1161,61 +1229,47 @@ app.use((err, req, res, _next) => {
     });
     syncLogger.flush();
 
-    // 预热图片解密脚本（多站回退 / 本地缓存），避免首张封面才失败
     ensureDecryptReady(getSites())
       .then(() => console.log('  图片解密脚本就绪'))
       .catch((e) => console.warn('  图片解密脚本未就绪:', e.message));
 
-    // 启动后静默后台爬取（仅计时，不做预估）
-    (async () => {
-      const t0 = Date.now();
-      const formatElapsed = (ms) => {
-        const sec = Math.max(0, Math.floor(ms / 1000));
-        return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-      };
-      const timer = setInterval(() => {
-        process.stdout.write(`\r  后台同步中… 已运行 ${formatElapsed(Date.now() - t0)}   `);
-      }, 1000);
-      if (typeof timer.unref === 'function') timer.unref();
-      syncLogger.info('startup-bg', '后台同步启动', { minPerSite: 50, concurrency: 12 });
-      try {
-        // merge 模式：避免 replace 中途崩溃把整库裁成仅本轮结果
-        await withIndexLock(() => crawl({
-          minPerSite: 50,
-          replace: false,
-          outDir: OUT_DIR,
-          jsonPath: JSON_PATH,
-          concurrency: 12,
-          pushEvery: 10,
-          onBatch: () => { onIndexChanged(); },
-          onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
-          onLog: makeOnLog('startup-bg', null),
-          failureScope: 'startup-bg',
-        }));
-        onIndexChanged();
-        clearInterval(timer);
-        process.stdout.write('\n');
-        const sec = ((Date.now() - t0) / 1000).toFixed(1);
-        console.log(`  同步完成，共 ${getIndex().length} 条，耗时 ${sec}s\n`);
-        syncLogger.info('startup-bg', '后台同步完成', { total: getIndex().length, sec });
-        syncLogger.flush();
-      } catch (e) {
-        clearInterval(timer);
-        process.stdout.write('\n');
-        flushFailureReport({ scope: 'startup-bg', fatal: formatRequestError(e), elapsedMs: Date.now() - t0 });
-        const sec = ((Date.now() - t0) / 1000).toFixed(1);
-        console.warn(`  同步失败（耗时 ${sec}s）:`, formatRequestError(e));
-        syncLogger.error('startup-bg', '后台同步失败: ' + e.message);
-        syncLogger.flush();
-      }
-    })();
-  });
+    if (backgroundCrawl) startBackgroundCrawl();
 
-  // 退出时关闭永久页无头浏览器，避免 Chrome/Edge 子进程残留
-  const shutdown = async (code = 0) => {
-    try { await permanentResolver.closeBrowser(); } catch (_) {}
-    process.exit(code);
-  };
-  process.once('SIGINT', () => { shutdown(0); });
-  process.once('SIGTERM', () => { shutdown(0); });
-})();
+    if (installSignalHandlers) {
+      const shutdown = async (code = 0) => {
+        try { await stopServer(); } catch (_) {}
+        process.exit(code);
+      };
+      process.once('SIGINT', () => { shutdown(0); });
+      process.once('SIGTERM', () => { shutdown(0); });
+    }
+
+    return { port, server: httpServer };
+  })();
+
+  try {
+    return await startPromise;
+  } catch (e) {
+    startPromise = null;
+    httpServer = null;
+    throw e;
+  }
+}
+
+async function stopServer() {
+  try { await permanentResolver.closeBrowser(); } catch (_) {}
+  if (!httpServer) return;
+  const srv = httpServer;
+  httpServer = null;
+  startPromise = null;
+  await new Promise((resolve) => srv.close(() => resolve()));
+}
+
+module.exports = { startServer, stopServer, OUT_DIR, APP_ROOT, BUILD_DIR };
+
+if (require.main === module) {
+  startServer({ installSignalHandlers: true }).catch((err) => {
+    console.error('启动失败:', err);
+    process.exit(1);
+  });
+}

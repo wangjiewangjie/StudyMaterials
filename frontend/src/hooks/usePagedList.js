@@ -18,8 +18,9 @@ export function usePagedList(items, resetDeps = []) {
 
   useEffect(() => {
     setVisibleCount((n) => {
-      if (list.length === 0) return PAGE_SIZE;
-      return Math.min(n, list.length);
+      // 列表短暂为空时保留已加载页数，避免高度塌缩把滚动条顶回顶部
+      if (list.length === 0) return n;
+      return Math.min(Math.max(n, PAGE_SIZE), list.length);
     });
   }, [list.length]);
 

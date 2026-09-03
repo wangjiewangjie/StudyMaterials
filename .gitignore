@@ -9,6 +9,14 @@ public/build/
 output/
 .server-port
 
+# Electron 打包产物
+dist-electron/
+
+# 由 npm run icons 从 build/logo.ico 生成
+build/icon.png
+build/icon.ico
+build/app-icon.ico
+
 # Logs
 *.log
 npm-debug.log*

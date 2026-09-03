@@ -1,14 +1,19 @@
 {
   "name": "StudyMaterials",
   "version": "1.0.0",
-  "description": "学习资料 - Node.js 爬虫 + 本地视频库 web UI",
-  "main": "server.js",
+  "description": "学习资料 - 本地视频资料库桌面应用",
+  "author": "StudyMaterials",
+  "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
     "crawl": "node crawler.js",
     "build": "npm --prefix frontend run build",
     "dev": "npm --prefix frontend run dev",
+    "icons": "node scripts/apply-logo-ico.js",
+    "electron": "electron .",
+    "dist": "npm run build && npm run icons && electron-builder --win",
+    "dist:dir": "npm run build && npm run icons && electron-builder --win --dir",
     "postinstall": "node scripts/install-frontend.js"
   },
   "dependencies": {
@@ -17,5 +22,67 @@
     "crypto-js": "^4.2.0",
     "express": "^4.21.0",
     "puppeteer-core": "^25.9.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.2",
+    "rcedit": "^5.0.1",
+    "resedit": "^1.7.2",
+    "sharp": "^0.35.4"
+  },
+  "build": {
+    "appId": "com.studymaterials.app",
+    "productName": "学习资料",
+    "copyright": "Copyright © StudyMaterials",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "build"
+    },
+    "icon": "build/app-icon.ico",
+    "files": [
+      "electron/**/*",
+      "server.js",
+      "crawler.js",
+      "image-decrypt.js",
+      "lib/**/*",
+      "public/build/**/*",
+      "build/logo.ico",
+      "build/app-icon.ico",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "afterExtract": "./scripts/after-extract.js",
+    "afterPack": "./scripts/after-pack.js",
+    "win": {
+      "icon": "build/app-icon.ico",
+      "executableName": "StudyMaterials",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "学习资料",
+      "installerIcon": "build/app-icon.ico",
+      "uninstallerIcon": "build/app-icon.ico",
+      "installerHeaderIcon": "build/app-icon.ico"
+    }
   }
 }

@@ -76,12 +76,15 @@ export function useSync(message, onSyncDone, onBatch) {
       es = new EventSource('/api/sync-events');
       esRef.current = es;
       es.onmessage = (ev) => {
-        onBatchRef.current?.();
         let payload;
         try {
           payload = JSON.parse(ev.data);
         } catch {
           return;
+        }
+        // 仅在索引批次变更时刷新列表；progress 极频繁，不应用来刷整表
+        if (payload?.type === 'batch') {
+          onBatchRef.current?.();
         }
         if (payload?.type === 'progress' && payload.detailsTotal > 0) {
           const next = Math.round((payload.detailsDone / payload.detailsTotal) * 90);
