@@ -1,21 +1,27 @@
 import { useState, useCallback, memo } from 'react';
 import { Tag } from 'antd';
 import {
-  StarOutlined, StarFilled, PlayCircleFilled, PictureOutlined,
+  StarOutlined, StarFilled, PlayCircleFilled, PictureOutlined, LoadingOutlined,
 } from '@ant-design/icons';
 import { formatDate } from '../utils/format.js';
 import { hostnameOf } from '../utils/sites.js';
+import { loadWatchProgress } from '../utils/watch-progress.js';
 
-function VideoCardBase({ item, onClick, isFavorited, onToggleFavorite, index = 0, showFavBadge = false, siteName }) {
+function VideoCardBase({
+  item, onClick, isFavorited, isFavPending = false, onToggleFavorite, index = 0, showFavBadge = false, siteName,
+}) {
   const thumb = item.coverUrl ? `/api/cover/${item.id}` : '';
   const hasVideo = !!(item.video && item.video.url);
   const [imgOk, setImgOk] = useState(!!thumb);
+  const watch = loadWatchProgress(item.id);
+  const progressPct = watch.percent;
 
   const handleClick = useCallback(() => onClick(item), [item, onClick]);
   const handleFav = useCallback((e) => {
     e.stopPropagation();
+    if (isFavPending) return;
     onToggleFavorite?.(item);
-  }, [item, onToggleFavorite]);
+  }, [item, onToggleFavorite, isFavPending]);
   const handleKey = useCallback((e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -25,6 +31,10 @@ function VideoCardBase({ item, onClick, isFavorited, onToggleFavorite, index = 0
 
   const sourceLabel = siteName
     || (item.siteUrl ? (hostnameOf(item.siteUrl) || '未知来源') : '未知来源');
+
+  let favIcon = <StarOutlined style={{ fontSize: 18 }} />;
+  if (isFavPending) favIcon = <LoadingOutlined style={{ fontSize: 18 }} spin />;
+  else if (isFavorited) favIcon = <StarFilled style={{ fontSize: 18 }} />;
 
   return (
     <div
@@ -55,22 +65,35 @@ function VideoCardBase({ item, onClick, isFavorited, onToggleFavorite, index = 0
 
         <button
           type="button"
+          disabled={isFavPending}
           title={isFavorited ? '取消收藏' : '加入收藏'}
           aria-label={isFavorited ? '取消收藏' : '加入收藏'}
+          aria-busy={isFavPending}
           onClick={handleFav}
-          className={`fav-icon-btn absolute top-2 right-2 z-[2] p-0 m-0 border-0 bg-transparent leading-none cursor-pointer drop-shadow-[0_1px_2px_rgba(0,0,0,.8)] ${
-            isFavorited ? 'text-ph-orange' : 'text-white/90 hover:text-ph-orange'
-          }`}
+          className={`fav-icon-btn absolute top-2 right-2 z-[2] p-0 m-0 border-0 bg-transparent leading-none drop-shadow-[0_1px_2px_rgba(0,0,0,.8)] ${
+            isFavPending ? 'opacity-50 cursor-wait' : 'cursor-pointer'
+          } ${isFavorited ? 'text-ph-orange' : 'text-white/90 hover:text-ph-orange'}`}
         >
-          {isFavorited
-            ? <StarFilled style={{ fontSize: 18 }} />
-            : <StarOutlined style={{ fontSize: 18 }} />}
+          {favIcon}
         </button>
 
         {hasVideo && (
           <span className="card-play absolute inset-0 z-[1] hidden md:flex items-center justify-center pointer-events-none text-ph-orange text-[42px] drop-shadow-[0_2px_8px_rgba(0,0,0,.65)]">
             <PlayCircleFilled />
           </span>
+        )}
+
+        {progressPct > 0 && (
+          <div
+            className="absolute left-0 right-0 bottom-0 z-[3] h-1 bg-black/50 pointer-events-none"
+            title={watch.duration > 0 ? `已观看 ${progressPct}%` : '继续观看'}
+            aria-hidden
+          >
+            <div
+              className="h-full bg-ph-orange shadow-[0_0_6px_rgba(255,153,0,.55)]"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
         )}
       </div>
 

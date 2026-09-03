@@ -112,10 +112,8 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
     const el = scrollerRef.current;
     if (!el) return undefined;
     const onWheel = (e) => {
-      const absX = Math.abs(e.deltaX);
-      const absY = Math.abs(e.deltaY);
-      if (absX > absY) return;
-      if (!e.shiftKey && absY < 1) return;
+      // 仅按住 Shift 时把纵向滚轮转为横向，避免挡住页面滚动
+      if (!e.shiftKey) return;
       if (el.scrollWidth <= el.clientWidth) return;
       e.preventDefault();
       el.scrollLeft += e.deltaY;

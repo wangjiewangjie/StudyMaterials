@@ -4,8 +4,8 @@ import {
   SyncOutlined, CloseOutlined, ClockCircleOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { formatElapsedHms } from '../utils/format.js';
+import { LOG_STICK_BOTTOM_PX } from '../constants/timing.js';
 
-// 同步进度模态框：总进度 / 统计 / 实时日志 / 已运行耗时。
 export default function SyncModal({
   open,
   status,
@@ -17,12 +17,20 @@ export default function SyncModal({
   onBackground,
 }) {
   const logRef = useRef(null);
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
+    const el = logRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [syncLogs]);
+
+  const handleLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distance < LOG_STICK_BOTTOM_PX;
+  };
 
   const elapsedLabel = formatElapsedHms(elapsed);
   const pct = Math.min(100, Math.max(0, Math.round(progress || 0)));
@@ -137,6 +145,7 @@ export default function SyncModal({
           </div>
           <pre
             ref={logRef}
+            onScroll={handleLogScroll}
             className="sync-log-box bg-[#050505] border border-white/5 rounded-lg p-3 font-mono text-[11px] leading-relaxed h-40 overflow-y-auto text-gray-400 whitespace-pre-wrap m-0"
           >
             {syncLogs || '准备中…'}

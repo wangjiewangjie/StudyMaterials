@@ -338,12 +338,49 @@ function rewriteM3u8(text, playlistUrl) {
     if (trimmed.startsWith('#')) {
       return line.replace(/URI="([^"]+)"/gi, (m, uri) => {
         const abs = resolvePlaylistUri(uri, playlistUrl);
+        if (abs) learnProxyHostFromUrl(abs);
         return abs ? `URI="${proxyPathFor(abs)}"` : m;
       });
     }
     const abs = resolvePlaylistUri(trimmed, playlistUrl);
+    if (abs) learnProxyHostFromUrl(abs);
     return abs ? proxyPathFor(abs) : line;
   }).join('\n');
+}
+
+/** m3u8 改写时学到的分片/子播放列表主机（CDN 常与入口 m3u8 不同域） */
+const learnedProxyHosts = new Map(); // hostname -> expireAt
+const LEARNED_PROXY_HOST_TTL_MS = 2 * 60 * 60 * 1000;
+
+function isPrivateOrLocalHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (!host) return true;
+  return (
+    host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    || /^10\.\d+\.\d+\.\d+$/.test(host)
+    || /^192\.168\.\d+\.\d+$/.test(host)
+    || /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host)
+    || /^169\.254\.\d+\.\d+$/.test(host)
+  );
+}
+
+function learnProxyHostFromUrl(absUrl) {
+  try {
+    const host = new URL(absUrl).hostname.toLowerCase();
+    if (isPrivateOrLocalHost(host)) return;
+    learnedProxyHosts.set(host, Date.now() + LEARNED_PROXY_HOST_TTL_MS);
+  } catch (_) { /* ignore */ }
+}
+
+function isLearnedProxyHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  const exp = learnedProxyHosts.get(host);
+  if (!exp) return false;
+  if (Date.now() > exp) {
+    learnedProxyHosts.delete(host);
+    return false;
+  }
+  return true;
 }
 
 /** 代理目标白名单：仅允许索引/站点相关主机，防开放代理 SSRF */
@@ -368,21 +405,16 @@ function collectProxyAllowedHosts() {
     add(a.coverUrl);
     for (const img of a.images || []) add(img);
   }
-  // 常见媒体 CDN 后缀（播放分片/封面）
   return hosts;
 }
 
 function isProxyHostAllowed(hostname) {
   if (!hostname) return false;
   const host = String(hostname).toLowerCase();
-  // 私有/本机地址一律拒绝
-  if (
-    host === 'localhost' || host === '127.0.0.1' || host === '::1'
-    || /^10\.\d+\.\d+\.\d+$/.test(host)
-    || /^192\.168\.\d+\.\d+$/.test(host)
-    || /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host)
-    || /^169\.254\.\d+\.\d+$/.test(host)
-  ) return false;
+  if (isPrivateOrLocalHost(host)) return false;
+
+  // HLS 分片/密钥：入口 m3u8 改写时动态登记
+  if (isLearnedProxyHost(host)) return true;
 
   const allowed = collectProxyAllowedHosts();
   if (allowed.has(host)) return true;
@@ -390,8 +422,10 @@ function isProxyHostAllowed(hostname) {
   for (const h of allowed) {
     if (host.endsWith('.' + h) || h.endsWith('.' + host)) return true;
   }
-  // 媒体 CDN 常见后缀：索引里的 m3u8 主机往往不在 sites 里
-  if (/\.(cloudfront\.net|akamaized\.net|piotrt\.cn|udhhzr\.cn|hdhwqx\.cn)$/i.test(host)) return true;
+  // 媒体 CDN 常见后缀（索引里的 m3u8 主机往往不在 sites 里）
+  if (/\.(cloudfront\.net|akamaized\.net|piotrt\.cn|udhhzr\.cn|hdhwqx\.cn|oolrvd\.cn)$/i.test(host)) {
+    return true;
+  }
   return false;
 }
 

@@ -1,13 +1,14 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from 'react';
-import { App as AntdApp, Spin } from 'antd';
+import { App as AntdApp, Spin, Button, Empty } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AppHeader from './components/AppHeader.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import MobileNavDrawer from './components/MobileNavDrawer.jsx';
+import BackTop from './components/BackTop.jsx';
 import { useAppData } from './hooks/useAppData.js';
 import { useSync } from './hooks/useSync.js';
 import { downloadFavorites } from './services/api.js';
-import { SYNC_MODAL_AUTO_CLOSE_MS } from './constants/timing.js';
+import { SYNC_MODAL_AUTO_CLOSE_MS, DETAIL_NOT_FOUND_MS } from './constants/timing.js';
 
 const HomeView = lazy(() => import('./views/HomeView.jsx'));
 const DetailView = lazy(() => import('./views/DetailView.jsx'));
@@ -54,6 +55,7 @@ export default function App() {
   const [activeTag, setActiveTag] = useState('');
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isDetailMissing, setIsDetailMissing] = useState(false);
   const [isMobile, setIsMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth < MOBILE_BREAKPOINT : false,
   );
@@ -70,11 +72,15 @@ export default function App() {
     items,
     favorites,
     favIds,
+    pendingFavIds,
     sites,
     siteCounts,
     siteNameMap,
     tagList,
     isLoadingList,
+    listError,
+    listVersion,
+    isBootstrapped,
     loadVideos,
     toggleFavorite,
     clearAllFavorites,
@@ -162,9 +168,13 @@ export default function App() {
   }, []);
 
   const handleStartSync = useCallback(() => {
+    if (isKeywordSyncing) {
+      message.warning('关键词同步进行中，请稍后再全量同步');
+      return;
+    }
     setIsSyncModalOpen(true);
     if (!isSyncing) startSync({ type: 'crawl' });
-  }, [isSyncing, startSync]);
+  }, [isSyncing, isKeywordSyncing, startSync, message]);
 
   const handleSyncBackground = useCallback(() => {
     setIsSyncModalOpen(false);
@@ -214,15 +224,12 @@ export default function App() {
     goHome();
   }, [message, goHome]);
 
-  const handleSearch = useCallback(() => {
+  const handleSearch = useCallback((override) => {
+    const q = typeof override === 'string' ? override : query.trim();
     setActiveTag('');
-    loadVideos(query.trim());
+    loadVideos(q);
     goHome();
   }, [query, loadVideos, goHome]);
-
-  const handleClearAll = useCallback(() => {
-    clearAllFavorites();
-  }, [clearAllFavorites]);
 
   const handleExport = useCallback(() => {
     downloadFavorites();
@@ -239,6 +246,24 @@ export default function App() {
   const detailItem = view === VIEW.DETAIL ? findItemById(route.id) : null;
   const isFavoritesView = view === VIEW.FAVORITES;
   const isSyncCenterView = view === VIEW.SYNC_CENTER;
+  const isHomeView = view === VIEW.HOME;
+  const isBusy = isSyncing || isKeywordSyncing;
+
+  useEffect(() => {
+    if (view !== VIEW.DETAIL || detailItem) {
+      setIsDetailMissing(false);
+      return undefined;
+    }
+    if (!isBootstrapped) return undefined;
+    const timer = setTimeout(() => setIsDetailMissing(true), DETAIL_NOT_FOUND_MS);
+    const quick = setTimeout(() => {
+      if (!findItemById(route.id)) setIsDetailMissing(true);
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(quick);
+    };
+  }, [view, route.id, detailItem, isBootstrapped, findItemById]);
 
   return (
     <ErrorBoundary>
@@ -255,6 +280,7 @@ export default function App() {
           onSyncClick={handleStartSync}
           onHomeClick={handleHomeClick}
           isSyncing={isSyncing}
+          isBusy={isBusy}
           elapsed={elapsed}
           isMobile={isMobile}
           onOpenDrawer={() => setIsDrawerOpen(true)}
@@ -271,13 +297,17 @@ export default function App() {
             <HomeView
               items={items}
               favIds={favIds}
+              pendingFavIds={pendingFavIds}
               siteNameMap={siteNameMap}
               tagList={tagList}
               isLoadingList={isLoadingList}
+              listError={listError}
+              listVersion={listVersion}
               activeTag={activeTag}
               onTagChange={setActiveTag}
               onCardClick={handleCardClick}
               onToggleFavorite={toggleFavorite}
+              onRetry={() => loadVideos(query.trim())}
             />
           )}
 
@@ -288,6 +318,7 @@ export default function App() {
               items={items}
               siteNameMap={siteNameMap}
               favIds={favIds}
+              pendingFavIds={pendingFavIds}
               isFavorited={favIds.has(detailItem.id)}
               onToggleFavorite={toggleFavorite}
               onBack={handleBack}
@@ -297,9 +328,26 @@ export default function App() {
           )}
 
           {view === VIEW.DETAIL && !detailItem && (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-ph-text-muted">
-              <Spin size="large" />
-              <div className="text-sm">正在加载详情…</div>
+            <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-ph-text-muted px-4">
+              {isDetailMissing ? (
+                <>
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="未找到该内容，可能已下架或链接失效"
+                  />
+                  <Button type="primary" onClick={() => navigate('/')}>
+                    返回首页
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Spin size="large" />
+                  <div className="text-sm">正在加载详情…</div>
+                  <Button type="link" onClick={() => navigate('/')}>
+                    返回首页
+                  </Button>
+                </>
+              )}
             </div>
           )}
 
@@ -307,12 +355,13 @@ export default function App() {
             <FavoritesView
               favorites={favorites}
               favIds={favIds}
+              pendingFavIds={pendingFavIds}
               siteNameMap={siteNameMap}
               query={favQuery}
               onQueryChange={setFavQuery}
               onCardClick={handleCardClick}
               onToggleFavorite={toggleFavorite}
-              onClearAll={handleClearAll}
+              onClearAll={clearAllFavorites}
               onExport={handleExport}
             />
           )}
@@ -352,16 +401,21 @@ export default function App() {
 
         <MobileNavDrawer
           open={isDrawerOpen && isMobile}
+          isHomeView={isHomeView}
           isFavoritesView={isFavoritesView}
           isSyncCenterView={isSyncCenterView}
           favoritesCount={favorites.length}
           isSyncing={isSyncing}
+          isBusy={isBusy}
           elapsed={elapsed}
           onClose={() => setIsDrawerOpen(false)}
+          onHomeClick={handleHomeClick}
           onFavoritesClick={handleFavoritesClick}
           onSyncCenterClick={handleSyncCenterClick}
           onSyncClick={handleStartSync}
         />
+
+        <BackTop />
       </div>
     </ErrorBoundary>
   );

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { Empty, Row, Col, Button, Tag, Badge, Input } from 'antd';
 import {
   SyncOutlined, PlayCircleFilled, DatabaseOutlined, VideoCameraOutlined,
@@ -126,6 +126,19 @@ export default function SyncCenterView({
   const lastSyncDate = lastSyncAt ? formatDate(lastSyncAt) : '—';
   const syncElapsedLabel = formatElapsedShort(elapsed);
   const isBusy = isSyncing || isKeywordSyncing;
+  const wasKeywordSyncing = useRef(false);
+
+  useEffect(() => {
+    if (wasKeywordSyncing.current && !isKeywordSyncing) {
+      const failed = (keywordResults || []).some(
+        (r) => r.status === 'error' || r.status === 'canceled'
+      );
+      if (!failed && (keywordResults || []).length > 0) {
+        setKeywords('');
+      }
+    }
+    wasKeywordSyncing.current = isKeywordSyncing;
+  }, [isKeywordSyncing, keywordResults]);
 
   return (
     <PageShell>
@@ -139,10 +152,10 @@ export default function SyncCenterView({
             type="primary"
             size="large"
             onClick={onTriggerSync}
-            disabled={isSyncing}
+            disabled={isBusy}
             icon={<PlayCircleFilled style={{ fontSize: 16 }} />}
             className={`!inline-flex !items-center !font-black !border-0 shrink-0 ${
-              isSyncing ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
+              isBusy ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
             }`}
           >
             {isSyncing ? `同步中 ${syncElapsedLabel}` : '立即全量同步'}

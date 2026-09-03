@@ -1,11 +1,14 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Spin, Empty, Typography, Row, Col, Button } from 'antd';
+import { useMemo, useState } from 'react';
+import { Spin, Empty, Typography, Row, Col, Button, Segmented } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import VideoCard from '../components/VideoCard.jsx';
 import TagFilterBar from '../components/TagFilterBar.jsx';
 import PageShell from '../components/PageShell.jsx';
 import { resolveSiteName } from '../utils/sites.js';
 import { CARD_GUTTER, CARD_RESPONSIVE } from '../constants/layout.js';
 import { PAGE_SIZE } from '../constants/timing.js';
+import { HOME_SORT_OPTIONS, sortByDatePublished, sortByTitle } from '../utils/sort.js';
+import { usePagedList } from '../hooks/usePagedList.js';
 
 const { Text } = Typography;
 
@@ -34,66 +37,40 @@ function SkeletonGrid({ count = 12 }) {
   );
 }
 
-// 首页：标签筛选 + 视频栅格（滚动/点击继续加载）
 export default function HomeView({
   items,
   favIds,
+  pendingFavIds,
   siteNameMap,
   tagList = [],
   isLoadingList,
+  listError,
+  listVersion = 0,
   activeTag,
   onTagChange,
   onCardClick,
   onToggleFavorite,
+  onRetry,
 }) {
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const sentinelRef = useRef(null);
-
-  // 先排序（仅在 items 引用变化时重排），再过滤（activeTag 变化只过滤不排序）
-  const sortedAll = useMemo(() => {
-    return items.slice().sort((a, b) => {
-      const da = a.datePublished || '';
-      const db = b.datePublished || '';
-      if (da && db) return db.localeCompare(da);
-      if (da) return -1;
-      if (db) return 1;
-      return Number(b.id) - Number(a.id);
-    });
-  }, [items]);
+  const [sort, setSort] = useState('date');
 
   const filtered = useMemo(() => {
-    if (!activeTag) return sortedAll;
-    return sortedAll.filter(
-      (it) => it.category === activeTag || ((it.tags || []).includes(activeTag))
-    );
-  }, [sortedAll, activeTag]);
+    let list = items;
+    if (activeTag) {
+      list = list.filter(
+        (it) => it.category === activeTag || ((it.tags || []).includes(activeTag)),
+      );
+    }
+    const sorted = list.slice();
+    if (sort === 'title') sorted.sort(sortByTitle);
+    else sorted.sort(sortByDatePublished);
+    return sorted;
+  }, [items, activeTag, sort]);
 
-  // 列表或标签变化时回到首屏
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [activeTag, items]);
-
-  const paged = filtered.slice(0, visibleCount);
-  const hasMore = visibleCount < filtered.length;
-
-  const loadMore = useCallback(() => {
-    setVisibleCount((n) => Math.min(filtered.length, n + PAGE_SIZE));
-  }, [filtered.length]);
-
-  // 触底自动加载下一批
-  useEffect(() => {
-    if (!hasMore) return undefined;
-    const el = sentinelRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) loadMore();
-      },
-      { root: null, rootMargin: '240px 0px', threshold: 0 }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [hasMore, loadMore, paged.length]);
+  const { paged, hasMore, loadMore, sentinelRef, total } = usePagedList(
+    filtered,
+    [activeTag, listVersion, sort],
+  );
 
   return (
     <PageShell home>
@@ -107,19 +84,47 @@ export default function HomeView({
 
       <div className="home-page-body">
         {!isLoadingList && filtered.length > 0 && (
-          <div className="toolbar-meta mb-2">
+          <div className="toolbar-meta mb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <span>
               {activeTag ? (
                 <>标签 <strong>#{activeTag}</strong> · </>
               ) : null}
-              已显示 <strong>{paged.length}</strong> / 共 <strong>{filtered.length}</strong> 条
+              已显示 <strong>{paged.length}</strong> / 共 <strong>{total}</strong> 条
             </span>
+            <Segmented
+              size="middle"
+              options={HOME_SORT_OPTIONS}
+              value={sort}
+              onChange={setSort}
+              className="!bg-ph-panelAlt self-start sm:self-auto"
+            />
           </div>
         )}
 
-        {isLoadingList && items.length === 0 ? (
-          <SkeletonGrid />
-        ) : (
+        {isLoadingList && items.length === 0 && <SkeletonGrid />}
+
+        {!isLoadingList && listError && items.length === 0 && (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <Text type="secondary" className="!text-ph-text-tertiary">
+                加载失败：{listError}
+              </Text>
+            }
+            className="!py-20 rise-in home-empty"
+          >
+            <Button
+              type="primary"
+              icon={<ReloadOutlined />}
+              onClick={onRetry}
+              className="!bg-ph-orange !border-0 !text-black !font-bold"
+            >
+              重试
+            </Button>
+          </Empty>
+        )}
+
+        {!(isLoadingList && items.length === 0) && !(listError && items.length === 0) && (
           <Spin spinning={isLoadingList && items.length > 0} tip="正在加载…">
             {filtered.length === 0 ? (
               <Empty
@@ -143,6 +148,7 @@ export default function HomeView({
                         index={i}
                         onClick={onCardClick}
                         isFavorited={favIds.has(item.id)}
+                        isFavPending={pendingFavIds?.has(item.id)}
                         onToggleFavorite={onToggleFavorite}
                         siteName={resolveSiteName(item.siteUrl, siteNameMap)}
                       />
@@ -156,13 +162,13 @@ export default function HomeView({
                       onClick={loadMore}
                       className="!font-bold !bg-white/5 !border-white/10 !text-ph-text-secondary hover:!text-ph-orange hover:!border-ph-orange/40"
                     >
-                      加载更多（还有 {filtered.length - paged.length} 条）
+                      加载更多（还有 {total - paged.length} 条）
                     </Button>
                   </div>
                 ) : null}
-                {!hasMore && filtered.length > PAGE_SIZE ? (
+                {!hasMore && total > PAGE_SIZE ? (
                   <p className="text-center text-xs text-ph-text-tertiary py-6 m-0">
-                    已全部加载 · 共 {filtered.length} 条
+                    已全部加载 · 共 {total} 条
                   </p>
                 ) : null}
               </>

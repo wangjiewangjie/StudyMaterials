@@ -1,6 +1,6 @@
 import { Button, Drawer } from 'antd';
 import {
-  StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
+  HomeOutlined, StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import { formatElapsedShort } from '../utils/format.js';
 
@@ -18,17 +18,18 @@ const BTN_ACTIVE = '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]';
 const BTN_IDLE = '!bg-[#141416] !text-neutral-200 !border-white/10';
 const BTN_DISABLED = '!bg-white/5 !border-white/10 !text-neutral-500';
 
-/**
- * 移动端侧栏：收藏 / 同步日志 / 立即同步
- */
+/** 移动端侧栏：首页 / 收藏 / 同步日志 / 立即同步 */
 export default function MobileNavDrawer({
   open,
+  isHomeView,
   isFavoritesView,
   isSyncCenterView,
   favoritesCount,
   isSyncing,
+  isBusy = false,
   elapsed,
   onClose,
+  onHomeClick,
   onFavoritesClick,
   onSyncCenterClick,
   onSyncClick,
@@ -44,6 +45,18 @@ export default function MobileNavDrawer({
       styles={DRAWER_STYLES}
     >
       <div className="space-y-2 mb-5">
+        <Button
+          block
+          size="large"
+          onClick={onHomeClick}
+          icon={<HomeOutlined />}
+          className={`!inline-flex !items-center !justify-start !font-bold !border ${
+            isHomeView ? BTN_ACTIVE : BTN_IDLE
+          }`}
+        >
+          首页
+        </Button>
+
         <Button
           block
           size="large"
@@ -81,10 +94,10 @@ export default function MobileNavDrawer({
           block
           size="large"
           onClick={onSyncClick}
-          disabled={isSyncing}
+          disabled={isBusy}
           icon={<SyncOutlined spin={isSyncing} />}
           className={`!inline-flex !items-center !justify-start !font-bold !border ${
-            isSyncing ? BTN_DISABLED : BTN_ACTIVE
+            isBusy ? BTN_DISABLED : BTN_ACTIVE
           }`}
         >
           {isSyncing

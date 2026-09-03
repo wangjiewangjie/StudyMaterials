@@ -16,16 +16,20 @@ function isAbortError(error) {
 
 /** 视频 / 收藏 / 站点 / 标签数据 */
 export function useAppData(message) {
-  // message 可能随渲染变化；用 ref 避免依赖抖动触发重复请求
   const messageRef = useRef(message);
   messageRef.current = message;
 
   const [items, setItems] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [favIds, setFavIds] = useState(() => new Set());
+  const [pendingFavIds, setPendingFavIds] = useState(() => new Set());
+  const pendingFavRef = useRef(new Set());
   const [sites, setSites] = useState([]);
   const [tagList, setTagList] = useState([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
+  const [listError, setListError] = useState(null);
+  const [listVersion, setListVersion] = useState(0);
+  const [isBootstrapped, setIsBootstrapped] = useState(false);
 
   const loadSites = useCallback(async () => {
     try {
@@ -47,14 +51,21 @@ export function useAppData(message) {
 
   const loadVideos = useCallback(async (q, opts = {}) => {
     const silent = !!opts.silent;
-    if (!silent) setIsLoadingList(true);
+    if (!silent) {
+      setIsLoadingList(true);
+      setListError(null);
+    }
     try {
       const data = await fetchVideos(q);
       setItems(data.items || []);
+      if (!silent) setListVersion((v) => v + 1);
       loadTags();
     } catch (error) {
       if (isAbortError(error)) return;
-      messageRef.current?.error(`加载失败：${error.message}`);
+      if (!silent) {
+        setListError(error.message || '加载失败');
+        messageRef.current?.error(`加载失败：${error.message}`);
+      }
     } finally {
       if (!silent) setIsLoadingList(false);
     }
@@ -73,7 +84,11 @@ export function useAppData(message) {
 
   const toggleFavorite = useCallback(async (item) => {
     if (!item?.id) return;
+    if (pendingFavRef.current.has(item.id)) return;
+
     const isFav = favIds.has(item.id);
+    pendingFavRef.current.add(item.id);
+    setPendingFavIds(new Set(pendingFavRef.current));
     try {
       if (isFav) {
         const data = await removeFavorite(item.id);
@@ -100,24 +115,31 @@ export function useAppData(message) {
       messageRef.current?.success('已加入收藏');
     } catch (error) {
       messageRef.current?.error(error.message);
+    } finally {
+      pendingFavRef.current.delete(item.id);
+      setPendingFavIds(new Set(pendingFavRef.current));
     }
   }, [favIds]);
 
   const clearAllFavorites = useCallback(async () => {
-    try {
-      await clearAllFavoritesAPI();
-    } catch {
-      // API 失败仍清空前端状态
-    }
+    const data = await clearAllFavoritesAPI();
+    if (data?.error) throw new Error(data.error);
     setFavorites([]);
     setFavIds(new Set());
     messageRef.current?.success('已清空收藏');
   }, []);
 
   useEffect(() => {
-    loadVideos('');
-    loadFavorites();
-    loadSites();
+    let cancelled = false;
+    (async () => {
+      await Promise.all([
+        loadVideos(''),
+        loadFavorites(),
+        loadSites(),
+      ]);
+      if (!cancelled) setIsBootstrapped(true);
+    })();
+    return () => { cancelled = true; };
   }, [loadVideos, loadFavorites, loadSites]);
 
   const siteCounts = useMemo(() => {
@@ -135,11 +157,15 @@ export function useAppData(message) {
     items,
     favorites,
     favIds,
+    pendingFavIds,
     sites,
     siteCounts,
     siteNameMap,
     tagList,
     isLoadingList,
+    listError,
+    listVersion,
+    isBootstrapped,
     loadVideos,
     toggleFavorite,
     clearAllFavorites,

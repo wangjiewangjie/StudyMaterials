@@ -8,6 +8,7 @@ import {
   isAlreadyProxied, shouldProxy,
 } from './utils/hls-url.js';
 import { refreshVideo } from './services/api.js';
+import { loadWatchTime, saveWatchProgress } from './utils/watch-progress.js';
 
 const HLS_TIMEOUTS = {
   // CDN + 本地代理可能较慢；默认值（10s/20s）会触发超时错误。
@@ -108,23 +109,7 @@ function playerReducer(state, action) {
   }
 }
 
-// ---------- 播放进度记忆 ----------
-const PROGRESS_KEY = (id) => `vp-progress:${id}`;
 const PROGRESS_SAVE_INTERVAL = 5000; // 5s 防抖
-
-function saveProgress(id, time) {
-  if (time > 5) {
-    try { localStorage.setItem(PROGRESS_KEY(id), String(time)); } catch { /* ignore */ }
-  }
-}
-
-function loadProgress(id) {
-  try {
-    return parseFloat(localStorage.getItem(PROGRESS_KEY(id)) || '0');
-  } catch {
-    return 0;
-  }
-}
 
 // 自定义 HLS.js 加载器：将跨域 CDN 请求路由到 CORS 代理
 const ProxyLoader = (() => {
@@ -397,7 +382,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
         // 保存旧播放器的进度
         try {
           const t = artRef.current.currentTime;
-          saveProgress(item.id, t);
+          saveWatchProgress(item.id, t, artRef.current.duration);
         } catch { /* ignore */ }
         teardownArt(artRef.current);
         artRef.current = null;
@@ -419,7 +404,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
             clearWatchdog();
 
             // 恢复上次播放进度
-            const saved = loadProgress(item.id);
+            const saved = loadWatchTime(item.id);
             if (saved > 5 && art.duration && saved < art.duration - 5) {
               try { art.currentTime = saved; } catch { /* ignore */ }
               logPlayer('已恢复进度', { id: item.id, time: saved });
@@ -456,7 +441,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
           const now = Date.now();
           if (now - lastSaveRef.current < PROGRESS_SAVE_INTERVAL) return;
           lastSaveRef.current = now;
-          try { saveProgress(item.id, art.currentTime); } catch { /* ignore */ }
+          try { saveWatchProgress(item.id, art.currentTime, art.duration); } catch { /* ignore */ }
         });
 
         // 启动本轮加载看门狗
@@ -571,7 +556,9 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
     }
     // 销毁前保存播放进度
     if (artRef.current) {
-      try { saveProgress(item.id, artRef.current.currentTime); } catch { /* ignore */ }
+      try {
+        saveWatchProgress(item.id, artRef.current.currentTime, artRef.current.duration);
+      } catch { /* ignore */ }
     }
     // 健壮销毁：彻底终止上一个视频的播放进程（含 HLS + <video> 节点）
     if (artRef.current) {

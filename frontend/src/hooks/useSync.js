@@ -123,7 +123,7 @@ export function useSync(message, onSyncDone, onBatch) {
   }, []);
 
   const startSync = useCallback(async () => {
-    if (isSyncing) return;
+    if (isSyncing || isKeywordSyncing) return;
     setIsSyncing(true);
     setProgress(0);
     setElapsed(0);
@@ -191,14 +191,14 @@ export function useSync(message, onSyncDone, onBatch) {
     } finally {
       setTimeout(() => reset(), SYNC_RESET_DELAY_MS);
     }
-  }, [isSyncing, message, pushHistory, reset]);
+  }, [isSyncing, isKeywordSyncing, message, pushHistory, reset]);
 
   const cancelSync = useCallback(() => {
     abortRef.current?.abort();
   }, []);
 
   const startKeywordSync = useCallback(async (keywordsInput) => {
-    if (isKeywordSyncing) return;
+    if (isKeywordSyncing || isSyncing) return;
 
     const uniqueKeywords = uniqueKeywordsFromInput(keywordsInput);
     if (uniqueKeywords.length === 0) {
@@ -295,7 +295,7 @@ export function useSync(message, onSyncDone, onBatch) {
     } finally {
       setIsKeywordSyncing(false);
     }
-  }, [isKeywordSyncing, message, pushHistory]);
+  }, [isKeywordSyncing, isSyncing, message, pushHistory]);
 
   const cancelKeywordSync = useCallback(() => {
     keywordAbortRef.current?.abort();

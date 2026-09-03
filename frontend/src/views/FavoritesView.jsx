@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Input, Empty, Modal, Typography, Row, Col, Button, Segmented } from 'antd';
+import { useMemo, useState, useEffect } from 'react';
+import { Input, Empty, Modal, Typography, Row, Col, Button, Segmented, App as AntdApp } from 'antd';
 import {
   StarFilled, DownloadOutlined, DeleteOutlined, SearchOutlined,
 } from '@ant-design/icons';
@@ -8,17 +8,16 @@ import PageShell from '../components/PageShell.jsx';
 import PageBanner from '../components/PageBanner.jsx';
 import { resolveSiteName } from '../utils/sites.js';
 import { CARD_GUTTER, CARD_RESPONSIVE } from '../constants/layout.js';
+import { FAV_SEARCH_DEBOUNCE_MS, PAGE_SIZE } from '../constants/timing.js';
+import { FAV_SORT_OPTIONS, sortByFavoritedAt, sortByTitle } from '../utils/sort.js';
+import { usePagedList } from '../hooks/usePagedList.js';
 
 const { Text } = Typography;
-
-const SORT_OPTIONS = [
-  { label: '最新收藏', value: 'recent' },
-  { label: '标题排序', value: 'title' },
-];
 
 export default function FavoritesView({
   favorites,
   favIds,
+  pendingFavIds,
   siteNameMap,
   query,
   onQueryChange,
@@ -27,40 +26,63 @@ export default function FavoritesView({
   onClearAll,
   onExport,
 }) {
+  const { message } = AntdApp.useApp();
   const [sort, setSort] = useState('recent');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [inputQuery, setInputQuery] = useState(query || '');
+  const [debouncedQuery, setDebouncedQuery] = useState(query || '');
+
+  useEffect(() => {
+    setInputQuery(query || '');
+  }, [query]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(inputQuery);
+      onQueryChange?.(inputQuery);
+    }, FAV_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [inputQuery, onQueryChange]);
 
   const filtered = useMemo(() => {
-    const qlc = (query || '').trim().toLowerCase();
+    const qlc = (debouncedQuery || '').trim().toLowerCase();
     let out = favorites;
     if (qlc) {
       out = out.filter(
-        (it) => (it.title || '').toLowerCase().includes(qlc) || (it.id || '').includes(qlc)
+        (it) => (it.title || '').toLowerCase().includes(qlc) || (it.id || '').includes(qlc),
       );
     }
-    return out.slice().sort((a, b) => {
-      if (sort === 'title') {
-        return (a.title || '').localeCompare(b.title || '');
-      }
-      const fa = a.favoritedAt || '';
-      const fb = b.favoritedAt || '';
-      if (fa && fb) return fb.localeCompare(fa);
-      if (fa) return -1;
-      if (fb) return 1;
-      return 0;
-    });
-  }, [favorites, query, sort]);
+    const sorted = out.slice();
+    if (sort === 'title') sorted.sort(sortByTitle);
+    else sorted.sort(sortByFavoritedAt);
+    return sorted;
+  }, [favorites, debouncedQuery, sort]);
+
+  const { paged, hasMore, loadMore, sentinelRef, total } = usePagedList(
+    filtered,
+    [debouncedQuery, sort, favorites.length],
+  );
+
+  const handleConfirmClear = async () => {
+    setIsClearing(true);
+    try {
+      await onClearAll();
+      setConfirmClear(false);
+    } catch (error) {
+      message.error(error?.message || '清空失败，请重试');
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   return (
     <PageShell>
       <PageBanner
-        icon={<StarFilled />}
-        title="我的收藏库"
-        subtitle={(
-          <>
-            你珍藏的 <span className="text-ph-orange font-bold">{favorites.length}</span> 部精彩影片
-          </>
-        )}
+        largeIcon
+        icon={<StarFilled className="text-xl text-ph-orange" />}
+        title="我的收藏"
+        subtitle="本地收藏库，支持搜索与导出"
         actions={(
           <>
             <Button
@@ -68,14 +90,12 @@ export default function FavoritesView({
               onClick={onExport}
               disabled={favorites.length === 0}
               icon={<DownloadOutlined style={{ fontSize: 14 }} />}
-              title="导出收藏列表 (JSON / TXT)"
-              className="!inline-flex !items-center !font-bold !bg-white/5 hover:!bg-white/10 !text-ph-text-secondary !border !border-white/10"
+              className="!inline-flex !items-center !font-bold !bg-white/5 !border-white/10 !text-ph-text-secondary"
             >
-              导出列表
+              导出
             </Button>
             <Button
               size="middle"
-              danger
               onClick={() => setConfirmClear(true)}
               disabled={favorites.length === 0}
               icon={<DeleteOutlined style={{ fontSize: 14 }} />}
@@ -95,25 +115,28 @@ export default function FavoritesView({
             allowClear
             size="middle"
             placeholder="在收藏库中搜索..."
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
+            value={inputQuery}
+            onChange={(e) => setInputQuery(e.target.value)}
             className="app-input-search !bg-ph-panel !border-white/10 !text-white"
           />
         </div>
         <Segmented
           size="middle"
-          options={SORT_OPTIONS}
+          options={FAV_SORT_OPTIONS}
           value={sort}
-          onChange={(v) => setSort(v)}
+          onChange={setSort}
           className="!bg-ph-panelAlt"
         />
       </div>
 
-      {filtered.length > 0 && (
+      {total > 0 && (
         <div className="toolbar-meta -mt-4">
           <span>
-            显示 <strong>{filtered.length}</strong>
-            {filtered.length !== favorites.length ? ` / ${favorites.length}` : ''} 条
+            已显示 <strong>{paged.length}</strong>
+            {total !== favorites.length || paged.length !== total
+              ? ` / ${total}`
+              : ''} 条
+            {filtered.length !== favorites.length ? `（共收藏 ${favorites.length}）` : ''}
           </span>
         </div>
       )}
@@ -132,36 +155,55 @@ export default function FavoritesView({
             className="!py-20 rise-in"
           />
         ) : (
-          <Row gutter={CARD_GUTTER}>
-            {filtered.map((item, i) => (
-              <Col key={item.id} {...CARD_RESPONSIVE} className="mb-3 sm:mb-5">
-                <VideoCard
-                  item={item}
-                  index={i}
-                  onClick={onCardClick}
-                  isFavorited={favIds.has(item.id)}
-                  onToggleFavorite={onToggleFavorite}
-                  showFavBadge
-                  siteName={resolveSiteName(item.siteUrl, siteNameMap)}
-                />
-              </Col>
-            ))}
-          </Row>
+          <>
+            <Row gutter={CARD_GUTTER}>
+              {paged.map((item, i) => (
+                <Col key={item.id} {...CARD_RESPONSIVE} className="mb-3 sm:mb-5">
+                  <VideoCard
+                    item={item}
+                    index={i}
+                    onClick={onCardClick}
+                    isFavorited={favIds.has(item.id)}
+                    isFavPending={pendingFavIds?.has(item.id)}
+                    onToggleFavorite={onToggleFavorite}
+                    showFavBadge
+                    siteName={resolveSiteName(item.siteUrl, siteNameMap)}
+                  />
+                </Col>
+              ))}
+            </Row>
+            {hasMore ? (
+              <div ref={sentinelRef} className="flex justify-center py-6">
+                <Button
+                  type="default"
+                  onClick={loadMore}
+                  className="!font-bold !bg-white/5 !border-white/10 !text-ph-text-secondary hover:!text-ph-orange hover:!border-ph-orange/40"
+                >
+                  加载更多（还有 {total - paged.length} 条）
+                </Button>
+              </div>
+            ) : null}
+            {!hasMore && total > PAGE_SIZE ? (
+              <p className="text-center text-xs text-ph-text-tertiary py-6 m-0">
+                已全部加载 · 共 {total} 条
+              </p>
+            ) : null}
+          </>
         )}
       </section>
 
       <Modal
         open={confirmClear}
-        onCancel={() => setConfirmClear(false)}
-        onOk={() => {
-          setConfirmClear(false);
-          onClearAll();
-        }}
+        onCancel={() => !isClearing && setConfirmClear(false)}
+        onOk={handleConfirmClear}
         okText="确认清空"
         cancelText="取消"
+        confirmLoading={isClearing}
         okButtonProps={{ danger: true }}
         title="清空所有收藏？"
         centered
+        closable={!isClearing}
+        maskClosable={!isClearing}
       >
         <Text className="!text-ph-text-secondary text-sm">
           此操作会移除全部 <span className="text-ph-orange font-bold">{favorites.length}</span> 条收藏，且不可撤销。

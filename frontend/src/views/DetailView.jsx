@@ -45,19 +45,24 @@ function fallbackBlocks(content, images) {
 
 function ThumbImage({ itemId, index }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
   const src = `/api/image/${itemId}/${index}`;
   return (
     <>
       <button
         type="button"
-        className="block w-full overflow-hidden rounded border border-white/5 bg-ph-elevated detail-thumb-wrap p-0 m-0 cursor-zoom-in"
+        className="block w-full overflow-hidden rounded border border-white/5 bg-ph-elevated detail-thumb-wrap p-0 m-0 cursor-zoom-in relative"
         onClick={() => setIsOpen(true)}
       >
+        {!isLoaded && <div className="absolute inset-0 skel" aria-hidden />}
         <img
           src={src}
           alt={`配图 ${index + 1}`}
           loading="lazy"
-          className="object-cover w-full h-full detail-thumb"
+          onLoad={() => setIsLoaded(true)}
+          className={`object-cover w-full h-full detail-thumb transition-opacity duration-300 ${
+            isLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
         />
       </button>
       {isOpen && (
@@ -110,6 +115,7 @@ export default function DetailView({
   items,
   siteNameMap,
   favIds,
+  pendingFavIds,
   isFavorited,
   onToggleFavorite,
   onBack,
@@ -139,6 +145,14 @@ export default function DetailView({
     );
     setLocalVideos(resolveVideos(item));
   }, [item]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onBack?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onBack]);
 
   const sourceName = useMemo(
     () => resolveSiteName(item.siteUrl, siteNameMap),
@@ -232,6 +246,7 @@ export default function DetailView({
           )}
           <Button
             size="small"
+            disabled={pendingFavIds?.has(item.id)}
             onClick={() => onToggleFavorite(item)}
             icon={isFavorited
               ? <StarFilled style={{ color: '#FF9900', fontSize: 13 }} />
@@ -242,7 +257,8 @@ export default function DetailView({
                 : '!bg-white/5 !text-ph-text-secondary !border-white/10 hover:!bg-white/10'
             }`}
           >
-            {isFavorited ? '已收藏' : '收藏'}
+            {pendingFavIds?.has(item.id) ? '处理中…' : null}
+            {!pendingFavIds?.has(item.id) && (isFavorited ? '已收藏' : '收藏')}
           </Button>
         </div>
       </div>
@@ -383,6 +399,7 @@ export default function DetailView({
                   index={i}
                   onClick={onCardClick}
                   isFavorited={favIds.has(it.id)}
+                  isFavPending={pendingFavIds?.has(it.id)}
                   onToggleFavorite={onToggleFavorite}
                   siteName={resolveSiteName(it.siteUrl, siteNameMap)}
                 />

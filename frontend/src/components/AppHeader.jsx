@@ -17,10 +17,13 @@ export default function AppHeader({
   onSyncClick,
   onHomeClick,
   isSyncing,
+  isBusy = false,
   elapsed = 0,
   isMobile,
   onOpenDrawer,
 }) {
+  const syncDisabled = isBusy;
+
   return (
     <header className="app-header sticky top-0 z-[200] w-full backdrop-blur-md bg-ph-header/90 border-b border-white/5">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
@@ -38,18 +41,34 @@ export default function AppHeader({
           </span>
         </Button>
 
-        <div className="flex-1 max-w-[260px] sm:max-w-xs md:max-w-md relative app-search">
-          <SearchOutlined className="absolute left-3 top-1/2 -translate-y-1/2 text-ph-text-tertiary z-10" style={{ fontSize: 14 }} />
-          <Input
-            allowClear
+        <div className="flex-1 max-w-[280px] sm:max-w-md relative app-search flex items-center gap-1.5">
+          <div className="relative flex-1 min-w-0">
+            <SearchOutlined className="absolute left-3 top-1/2 -translate-y-1/2 text-ph-text-tertiary z-10" style={{ fontSize: 14 }} />
+            <Input
+              allowClear
+              size="middle"
+              placeholder="搜索视频、分类、标签…"
+              value={query}
+              onChange={(e) => {
+                const val = e.target.value;
+                onQueryChange(val);
+                if (!val) onSearch('');
+              }}
+              onPressEnter={onSearch}
+              className="app-input-search !bg-ph-panel !border-white/10 !text-white"
+              styles={{ input: { background: 'transparent' } }}
+            />
+          </div>
+          <Button
+            type="primary"
             size="middle"
-            placeholder="搜索视频、分类、标签…"
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onPressEnter={onSearch}
-            className="app-input-search !bg-ph-panel !border-white/10 !text-white"
-            styles={{ input: { background: 'transparent' } }}
-          />
+            icon={<SearchOutlined />}
+            onClick={onSearch}
+            aria-label="搜索"
+            className="!bg-ph-orange hover:!bg-ph-orange-light !text-black !border-0 !font-bold shrink-0"
+          >
+            <span className="hidden sm:inline">搜索</span>
+          </Button>
         </div>
 
         {isMobile ? (
@@ -92,9 +111,9 @@ export default function AppHeader({
               type="text"
               size="middle"
               onClick={onSyncClick}
-              disabled={isSyncing}
+              disabled={syncDisabled}
               className={`!inline-flex !items-center !gap-1.5 !font-bold !border ${
-                isSyncing
+                syncDisabled
                   ? '!bg-white/5 !border-white/10 !text-ph-text-muted cursor-not-allowed'
                   : '!bg-ph-orange/10 !border-ph-orange/30 !text-ph-orange hover:!bg-ph-orange/20'
               }`}
