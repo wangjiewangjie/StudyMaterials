@@ -9,15 +9,16 @@ const net = require('net');
 const os = require('os');
 const axios = require('axios');
 const { EventEmitter } = require('events');
-const { crawl, loadIndex, parseDetailPage, resolvePlayerUrl, UA,
+const { crawl, loadIndex, saveIndex, parseDetailPage, resolvePlayerUrl, UA,
   getSiteConfigs, getSites, getBaseUrl, setFailureLogPath, flushFailureReport, formatRequestError,
-  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig } = require('./crawler');
+  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig, normalizeSiteUrl } = require('./crawler');
 const { decryptBuffer, resetDecrypt, ensureDecryptReady } = require('./image-decrypt');
 const { normalizeUpstreamUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
 const { filterExcludedArticles } = require('./lib/exclude');
 const { sanitizeDetailBlocks, sanitizeDetailContent } = require('./lib/detail-noise');
 const { createSyncLogger } = require('./lib/sync-logger');
+const permanentResolver = require('./lib/permanent-resolve');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
 const PORT_FILE = path.join(__dirname, '.server-port');
@@ -138,17 +139,24 @@ function rebuildIdMap(articles) {
   }
 }
 
-/** 异步写索引：内存缓存立即更新，磁盘写入不阻塞响应 */
+/** 异步写索引：内存缓存立即更新；紧凑 JSON + 原子写 */
 function writeIndexAsync(articles) {
   indexCache = articles;
   rebuildIdMap(articles);
-  const data = JSON.stringify(articles, null, 2);
-  fs.writeFile(JSON_PATH, data, 'utf8', (err) => {
+  const tmp = `${JSON_PATH}.${process.pid}.tmp`;
+  const data = JSON.stringify(articles);
+  fs.writeFile(tmp, data, 'utf8', (err) => {
     if (err) {
       console.warn('[索引] 异步写入失败:', err.message);
       return;
     }
-    try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
+    fs.rename(tmp, JSON_PATH, (err2) => {
+      if (err2) {
+        console.warn('[索引] 原子替换失败:', err2.message);
+        return;
+      }
+      try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
+    });
   });
 }
 
@@ -252,6 +260,29 @@ function toVideoItem(a) {
   };
 }
 
+/** 列表轻量项：去掉正文/图集/blocks，显著缩小 /api/videos 体积 */
+function toVideoListItem(a) {
+  const videos = Array.isArray(a.videos) && a.videos.length
+    ? a.videos
+    : (a.video ? [a.video] : []);
+  return {
+    id: a.id,
+    title: a.title || '',
+    url: a.url,
+    siteUrl: a.siteUrl || null,
+    coverUrl: a.coverUrl || null,
+    video: videos[0] || a.video || null,
+    videos,
+    tags: a.tags || [],
+    category: a.category || null,
+    datePublished: a.datePublished || null,
+    content: '',
+    images: [],
+    blocks: [],
+    favoritedAt: a.favoritedAt || null,
+  };
+}
+
 /** 按 id 查找：优先索引（O(1) map），其次收藏（收藏不被爬取清空） */
 function findById(id) {
   const index = getIndex();
@@ -315,6 +346,55 @@ function rewriteM3u8(text, playlistUrl) {
   }).join('\n');
 }
 
+/** 代理目标白名单：仅允许索引/站点相关主机，防开放代理 SSRF */
+function collectProxyAllowedHosts() {
+  const hosts = new Set();
+  const add = (raw) => {
+    if (!raw) return;
+    try {
+      const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+      if (u.hostname) hosts.add(u.hostname.toLowerCase());
+    } catch (_) { /* ignore */ }
+  };
+  for (const s of getSiteConfigs()) {
+    add(s.url);
+    add(s.permanentUrl);
+    for (const ln of s.lines || []) add(ln.host || ln.url);
+  }
+  for (const a of getIndex()) {
+    add(a.siteUrl);
+    if (a.video && a.video.url) add(a.video.url);
+    for (const v of a.videos || []) add(v && v.url);
+    add(a.coverUrl);
+    for (const img of a.images || []) add(img);
+  }
+  // 常见媒体 CDN 后缀（播放分片/封面）
+  return hosts;
+}
+
+function isProxyHostAllowed(hostname) {
+  if (!hostname) return false;
+  const host = String(hostname).toLowerCase();
+  // 私有/本机地址一律拒绝
+  if (
+    host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    || /^10\.\d+\.\d+\.\d+$/.test(host)
+    || /^192\.168\.\d+\.\d+$/.test(host)
+    || /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host)
+    || /^169\.254\.\d+\.\d+$/.test(host)
+  ) return false;
+
+  const allowed = collectProxyAllowedHosts();
+  if (allowed.has(host)) return true;
+  // 允许与已登记主机同注册域的子域（如 *.cloudfront.net 分片、媒体 CDN）
+  for (const h of allowed) {
+    if (host.endsWith('.' + h) || h.endsWith('.' + host)) return true;
+  }
+  // 媒体 CDN 常见后缀：索引里的 m3u8 主机往往不在 sites 里
+  if (/\.(cloudfront\.net|akamaized\.net|piotrt\.cn|udhhzr\.cn|hdhwqx\.cn)$/i.test(host)) return true;
+  return false;
+}
+
 app.get('/proxy/*', async (req, res) => {
   // Express 已解码过 splat 参数，直接使用
   let targetUrl = req.params[0];
@@ -337,12 +417,18 @@ app.get('/proxy/*', async (req, res) => {
     console.log('[代理] 已展开嵌套CDN代理', shortUrl(rawTarget), '->', shortUrl(targetUrl));
   }
 
-  let referer;
+  let parsed;
   try {
-    referer = new URL(targetUrl).origin + '/';
+    parsed = new URL(targetUrl);
   } catch (_) {
-    referer = getBaseUrl() + '/';
+    return res.status(400).send('无效地址');
   }
+  if (!isProxyHostAllowed(parsed.hostname)) {
+    console.warn('[代理] 拒绝未授权主机', parsed.hostname);
+    return res.status(403).json({ error: '代理目标不在白名单内', host: parsed.hostname });
+  }
+
+  const referer = parsed.origin + '/';
 
   try {
     const isSegment = /\.(ts|m4s|mp4|aac)(\?|$)/i.test(targetUrl);
@@ -438,13 +524,15 @@ app.get('/api/videos', (req, res) => {
 
   const page = parseInt(req.query.page, 10);
   const size = Math.min(parseInt(req.query.size, 10) || 60, 200);
+  const full = req.query.full === '1' || req.query.full === 'true';
+  const mapItem = full ? toVideoItem : toVideoListItem;
 
   if (page && page > 0) {
     const start = (page - 1) * size;
-    const items = filtered.slice(start, start + size).map(toVideoItem);
+    const items = filtered.slice(start, start + size).map(mapItem);
     res.json({ total: filtered.length, items, page, size, hasMore: start + size < filtered.length });
   } else {
-    const items = filtered.map(toVideoItem);
+    const items = filtered.map(mapItem);
     res.json({ total: items.length, items });
   }
 });
@@ -482,17 +570,39 @@ function sniffImage(buf) {
 
 /** 文章请求 Referer：优先 siteUrl，其次归档 URL origin */
 function refererFor(item) {
-  return item.siteUrl || (item.url ? new URL(item.url).origin : getBaseUrl());
+  const raw = item.siteUrl || (item.url ? (() => { try { return new URL(item.url).origin; } catch (_) { return ''; } })() : '') || getBaseUrl();
+  return normalizeSiteUrl(raw) || raw;
 }
 
 /** 解密脚本优先站点列表（当前条目站 + 已启用站） */
 function decryptSiteCandidates(item) {
   const list = [];
-  if (item && item.siteUrl) list.push(item.siteUrl);
-  for (const s of getSites()) list.push(s);
+  if (item && item.siteUrl) list.push(normalizeSiteUrl(item.siteUrl));
+  for (const s of getSites()) list.push(normalizeSiteUrl(s));
   const base = getBaseUrl();
-  if (base) list.push(base);
-  return list;
+  if (base) list.push(normalizeSiteUrl(base));
+  return [...new Set(list.filter(Boolean))];
+}
+
+// 封面/图集解密上游并发限流，避免首页冷启动打爆 CPU
+const COVER_FETCH_LIMIT = 4;
+let _coverActive = 0;
+const _coverWaiters = [];
+function acquireCoverSlot() {
+  if (_coverActive < COVER_FETCH_LIMIT) {
+    _coverActive += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => { _coverWaiters.push(resolve); });
+}
+function releaseCoverSlot() {
+  const next = _coverWaiters.shift();
+  if (next) {
+    // 名额转给排队者，保持 _coverActive 不变
+    next();
+  } else {
+    _coverActive = Math.max(0, _coverActive - 1);
+  }
 }
 
 function mediaCachePath(kind, id, index) {
@@ -544,36 +654,41 @@ async function fetchDecryptedImage(item, imageUrl, cacheKey) {
   const cached = readMediaCache(cacheKey.kind, cacheKey.id, cacheKey.index);
   if (cached) return cached;
 
-  const refererSite = refererFor(item);
-  const upstream = await axios.get(imageUrl, {
-    responseType: 'arraybuffer',
-    timeout: 30000,
-    maxRedirects: 5,
-    headers: { 'User-Agent': UA, Referer: refererSite + '/' },
-  });
-  const raw = Buffer.from(upstream.data);
-  let buf = raw;
-  let sniff = sniffImage(buf);
-  if (!sniff.valid) {
-    const sites = decryptSiteCandidates(item);
-    try {
-      buf = await decryptBuffer(raw, sites);
-    } catch (decErr) {
-      await resetDecrypt();
+  await acquireCoverSlot();
+  try {
+    const refererSite = refererFor(item);
+    const upstream = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      maxRedirects: 5,
+      headers: { 'User-Agent': UA, Referer: refererSite + '/' },
+    });
+    const raw = Buffer.from(upstream.data);
+    let buf = raw;
+    let sniff = sniffImage(buf);
+    if (!sniff.valid) {
+      const sites = decryptSiteCandidates(item);
       try {
         buf = await decryptBuffer(raw, sites);
-      } catch (e2) {
-        throw new Error(`图片解密失败: ${e2.message}`);
+      } catch (decErr) {
+        await resetDecrypt();
+        try {
+          buf = await decryptBuffer(raw, sites);
+        } catch (e2) {
+          throw new Error(`图片解密失败: ${e2.message}`);
+        }
+      }
+      sniff = sniffImage(buf);
+      if (!sniff.valid) {
+        throw new Error('解密后仍不是有效图片');
       }
     }
-    sniff = sniffImage(buf);
-    if (!sniff.valid) {
-      throw new Error('解密后仍不是有效图片');
-    }
-  }
 
-  writeMediaCache(cacheKey.kind, cacheKey.id, cacheKey.index, buf, sniff.contentType);
-  return { buf, contentType: sniff.contentType };
+    writeMediaCache(cacheKey.kind, cacheKey.id, cacheKey.index, buf, sniff.contentType);
+    return { buf, contentType: sniff.contentType };
+  } finally {
+    releaseCoverSlot();
+  }
 }
 
 app.get('/api/cover/:id', async (req, res) => {
@@ -704,9 +819,10 @@ app.get('/api/refresh/:id', async (req, res) => {
 
     if (Object.keys(patch).length) {
       if (found.source === 'index') {
-        // 异步写盘不阻塞响应（内存缓存已即时更新）
-        writeIndexAsync(getIndex());
-        // 收藏快照存在时同步更新
+        await withIndexLock(() => {
+          saveIndex(JSON_PATH, getIndex());
+          try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
+        });
         patchFavoriteById(target.id, patch);
       } else {
         writeFavorites(getFavorites());
@@ -872,8 +988,8 @@ app.post('/api/sync-keywords', async (req, res) => {
         limit: 0,
         outDir: OUT_DIR,
         jsonPath: JSON_PATH,
-        concurrency: 15,
-        pushEvery: 5,
+        concurrency: 12,
+        pushEvery: 10,
         onBatch: () => { onIndexChanged(); },
         onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
         onLog: makeOnLog('sync-keywords', kwLogs),
@@ -947,18 +1063,18 @@ app.post('/api/crawl', async (req, res) => {
   const logs = [];
   syncLogger.info('crawl', '开始列表页爬取', { pageStart, pageEnd });
   try {
-    const result = await crawl({
+    const result = await withIndexLock(() => crawl({
       pageStart,
       pageEnd,
       outDir: OUT_DIR,
       jsonPath: JSON_PATH,
-      concurrency: 15,
-      pushEvery: 5,
+      concurrency: 12,
+      pushEvery: 10,
       onBatch: () => { onIndexChanged(); },
       onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
       onLog: makeOnLog('crawl', logs),
       failureScope: 'crawl',
-    });
+    }));
     onIndexChanged();
     syncLogger.info('crawl', '列表页爬取完成', { added: result.added, total: result.total });
     syncLogger.flush();
@@ -1027,20 +1143,21 @@ app.use((err, req, res, _next) => {
         process.stdout.write(`\r  后台同步中… 已运行 ${formatElapsed(Date.now() - t0)}   `);
       }, 1000);
       if (typeof timer.unref === 'function') timer.unref();
-      syncLogger.info('startup-bg', '后台同步启动', { minPerSite: 50, concurrency: 15 });
+      syncLogger.info('startup-bg', '后台同步启动', { minPerSite: 50, concurrency: 12 });
       try {
-        await crawl({
+        // merge 模式：避免 replace 中途崩溃把整库裁成仅本轮结果
+        await withIndexLock(() => crawl({
           minPerSite: 50,
-          replace: true,
+          replace: false,
           outDir: OUT_DIR,
           jsonPath: JSON_PATH,
-          concurrency: 15,
-          pushEvery: 5,
+          concurrency: 12,
+          pushEvery: 10,
           onBatch: () => { onIndexChanged(); },
           onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
           onLog: makeOnLog('startup-bg', null),
           failureScope: 'startup-bg',
-        });
+        }));
         onIndexChanged();
         clearInterval(timer);
         process.stdout.write('\n');
@@ -1059,4 +1176,12 @@ app.use((err, req, res, _next) => {
       }
     })();
   });
+
+  // 退出时关闭永久页无头浏览器，避免 Chrome/Edge 子进程残留
+  const shutdown = async (code = 0) => {
+    try { await permanentResolver.closeBrowser(); } catch (_) {}
+    process.exit(code);
+  };
+  process.once('SIGINT', () => { shutdown(0); });
+  process.once('SIGTERM', () => { shutdown(0); });
 })();

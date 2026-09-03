@@ -26,49 +26,43 @@ function logPlayer(...args) {
   console.error('[VideoPlayer]', ...args);
 }
 
-// ---------- 播放器彻底销毁 ----------
-// 目标：在播放新视频前，100% 终止上一个视频的播放进程（音频叠加的根因）。
-// 旧实现的缺陷：hls.destroy() 一旦抛错，art.destroy() 会被跳过，而 artRef 已被置空，
-// 导致上一个 Artplayer 实例（及其 HLS MediaSource）彻底“丢失”且无法再次清理，
-// HLS 致命错误处理里甚至可能 hls.startLoad() 继续出声。
-// 这里拆分每一步、各自 try/catch，并在最后兜底移除容器内所有 <video> 节点。
-
+// 销毁前彻底停掉上一个实例，避免音频叠加 / MediaSource 泄漏
 function stopVideoElement(video) {
   if (!video) return;
-  try { video.pause(); } catch (_) {}
-  try { video.removeAttribute('src'); } catch (_) {}
-  try { if (video.src) { video.removeAttribute('src'); video.load(); } } catch (_) {}
-  try { video.load(); } catch (_) {}
+  try { video.pause(); } catch { /* ignore */ }
+  try { video.removeAttribute('src'); } catch { /* ignore */ }
+  try {
+    if (video.src) {
+      video.removeAttribute('src');
+      video.load();
+    }
+  } catch { /* ignore */ }
+  try { video.load(); } catch { /* ignore */ }
 }
 
-/** 销毁单个 Artplayer 实例：暂停 → 销毁 HLS → 销毁 Artplayer → 兜底移除 DOM */
 function teardownArt(art) {
   if (!art) return;
-  // 1) 先强行暂停并清空底层 <video>，切断 MSE/音频来源
   try {
     const v = art.video || (art.template && art.template.$video);
     stopVideoElement(v);
-  } catch (_) {}
-  // 2) 销毁 HLS 实例（独立 try，避免一个失败连累另一个）
+  } catch { /* ignore */ }
   try {
     if (art.hls) { art.hls.destroy(); art.hls = null; }
-  } catch (_) {}
-  // 3) 销毁 Artplayer 自身（内部 reset 会清空 src）
+  } catch { /* ignore */ }
   try {
     art.destroy(true);
-  } catch (_) {}
-  // 4) 兜底：移除容器内所有残留 <video> 节点，彻底断开音频
+  } catch { /* ignore */ }
   try {
     const cont = art.template && art.template.$container;
     if (cont) {
       const vids = cont.querySelectorAll('video');
       for (const vd of vids) {
-        try { vd.pause(); } catch (_) {}
-        try { vd.remove(); } catch (_) {}
+        try { vd.pause(); } catch { /* ignore */ }
+        try { vd.remove(); } catch { /* ignore */ }
       }
       cont.innerHTML = '';
     }
-  } catch (_) {}
+  } catch { /* ignore */ }
 }
 
 /** 清理容器：暂停并移除所有 <video>，防止任何游离节点继续出声 */
@@ -77,11 +71,11 @@ function clearContainer(container) {
   try {
     const vids = container.querySelectorAll('video');
     for (const vd of vids) {
-      try { vd.pause(); } catch (_) {}
-      try { vd.remove(); } catch (_) {}
+      try { vd.pause(); } catch { /* ignore */ }
+      try { vd.remove(); } catch { /* ignore */ }
     }
     container.innerHTML = '';
-  } catch (_) {}
+  } catch { /* ignore */ }
 }
 
 // ---------- 播放器 UI 状态机 ----------
@@ -120,13 +114,16 @@ const PROGRESS_SAVE_INTERVAL = 5000; // 5s 防抖
 
 function saveProgress(id, time) {
   if (time > 5) {
-    try { localStorage.setItem(PROGRESS_KEY(id), String(time)); } catch (_) {}
+    try { localStorage.setItem(PROGRESS_KEY(id), String(time)); } catch { /* ignore */ }
   }
 }
 
 function loadProgress(id) {
-  try { return parseFloat(localStorage.getItem(PROGRESS_KEY(id)) || '0'); }
-  catch (_) { return 0; }
+  try {
+    return parseFloat(localStorage.getItem(PROGRESS_KEY(id)) || '0');
+  } catch {
+    return 0;
+  }
 }
 
 // 自定义 HLS.js 加载器：将跨域 CDN 请求路由到 CORS 代理
@@ -236,7 +233,7 @@ function createArtplayer({ container, video, m3u8Url, onReady, onError }) {
     screenshot: true,
     // 自定义 HLS 处理
     customType: {
-      m3u8: function (video, url) {
+      m3u8(video, url) {
         if (Hls.isSupported()) {
           const hls = new Hls({
             loader: ProxyLoader,
@@ -332,7 +329,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
 
     dispatch({ type: 'START_LOADING' });
 
-    let currentUrl = activeVideoRef.current && activeVideoRef.current.url;
+    let currentUrl = activeVideoUrl;
     if (!currentUrl) {
       dispatch({ type: 'SET_PHASE', phase: 'none' });
       return;
@@ -401,7 +398,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
         try {
           const t = artRef.current.currentTime;
           saveProgress(item.id, t);
-        } catch (_) {}
+        } catch { /* ignore */ }
         teardownArt(artRef.current);
         artRef.current = null;
       }
@@ -424,7 +421,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
             // 恢复上次播放进度
             const saved = loadProgress(item.id);
             if (saved > 5 && art.duration && saved < art.duration - 5) {
-              try { art.currentTime = saved; } catch (_) {}
+              try { art.currentTime = saved; } catch { /* ignore */ }
               logPlayer('已恢复进度', { id: item.id, time: saved });
             }
 
@@ -459,7 +456,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
           const now = Date.now();
           if (now - lastSaveRef.current < PROGRESS_SAVE_INTERVAL) return;
           lastSaveRef.current = now;
-          try { saveProgress(item.id, art.currentTime); } catch (_) {}
+          try { saveProgress(item.id, art.currentTime); } catch { /* ignore */ }
         });
 
         // 启动本轮加载看门狗
@@ -522,9 +519,12 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       }
 
       // 匹配当前视频的新地址
-      const refreshedList = Array.isArray(data.videos) && data.videos.length
-        ? data.videos
-        : (data.video ? [data.video] : []);
+      let refreshedList = [];
+      if (Array.isArray(data.videos) && data.videos.length) {
+        refreshedList = data.videos;
+      } else if (data.video) {
+        refreshedList = [data.video];
+      }
       const av = activeVideoRef.current;
       const matched = refreshedList.find((v) => v && v.url && av && v.url.split('?')[0] === av.url.split('?')[0])
         || refreshedList.find((v) => v && av && v.title && v.title === av.title)
@@ -571,7 +571,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
     }
     // 销毁前保存播放进度
     if (artRef.current) {
-      try { saveProgress(item.id, artRef.current.currentTime); } catch (_) {}
+      try { saveProgress(item.id, artRef.current.currentTime); } catch { /* ignore */ }
     }
     // 健壮销毁：彻底终止上一个视频的播放进程（含 HLS + <video> 节点）
     if (artRef.current) {
@@ -579,7 +579,7 @@ export default function VideoPlayer({ item, video: videoProp, onTags, defer = fa
       artRef.current = null;
     }
     clearContainer(containerRef.current);
-  }, []);
+  }, [item.id]);
 
   const retry = useCallback(() => { loadSource(); }, [loadSource]);
   const startDeferred = useCallback(() => {

@@ -16,7 +16,7 @@ export default function AppHeader({
   onSyncCenterClick,
   onSyncClick,
   onHomeClick,
-  syncing,
+  isSyncing,
   elapsed = 0,
   isMobile,
   onOpenDrawer,
@@ -92,15 +92,15 @@ export default function AppHeader({
               type="text"
               size="middle"
               onClick={onSyncClick}
-              disabled={syncing}
+              disabled={isSyncing}
               className={`!inline-flex !items-center !gap-1.5 !font-bold !border ${
-                syncing
+                isSyncing
                   ? '!bg-white/5 !border-white/10 !text-ph-text-muted cursor-not-allowed'
                   : '!bg-ph-orange/10 !border-ph-orange/30 !text-ph-orange hover:!bg-ph-orange/20'
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${syncing ? 'bg-ph-text-muted' : 'bg-ph-orange'}`} />
-              {syncing ? (
+              <span className={`w-2 h-2 rounded-full ${isSyncing ? 'bg-ph-text-muted' : 'bg-ph-orange'}`} />
+              {isSyncing ? (
                 <span className="tabular-nums">
                   同步中 {formatElapsedShort(elapsed)}
                 </span>

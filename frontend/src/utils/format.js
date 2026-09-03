@@ -14,3 +14,10 @@ export function formatElapsedHms(ms) {
   const s = String(sec % 60).padStart(2, '0');
   return `${h}:${m}:${s}`;
 }
+
+/** ISO 日期 → `YYYY-MM-DD` */
+export function formatDate(iso) {
+  if (!iso) return '';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}

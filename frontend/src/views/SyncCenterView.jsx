@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Empty, Row, Col, Button, Table, Tag, Badge, Input } from 'antd';
+import { Empty, Row, Col, Button, Tag, Badge, Input } from 'antd';
 import {
   SyncOutlined, PlayCircleFilled, DatabaseOutlined, VideoCameraOutlined,
   ClockCircleOutlined, WarningOutlined, ExclamationCircleOutlined,
@@ -8,8 +8,7 @@ import {
 } from '@ant-design/icons';
 import PageShell from '../components/PageShell.jsx';
 import PageBanner from '../components/PageBanner.jsx';
-import { formatDate } from '../services/api.js';
-import { formatElapsedShort } from '../utils/format.js';
+import { formatDate, formatElapsedShort } from '../utils/format.js';
 import {
   STAT_GUTTER, STAT_RESPONSIVE, SRC_GUTTER, SRC_RESPONSIVE,
 } from '../constants/layout.js';
@@ -26,6 +25,22 @@ const RESULT_LABEL = {
   error: '失败',
   canceled: '取消',
 };
+
+const KW_STATUS_META = {
+  running: { color: 'processing', text: '进行中', icon: 'running' },
+  error: { color: 'error', text: '失败', icon: 'error' },
+  canceled: { color: 'default', text: '已取消', icon: 'error' },
+  done: { color: 'success', text: '完成', icon: 'ok' },
+  exhausted: { color: 'warning', text: '已抓完', icon: 'ok' },
+};
+
+function keywordStatusMeta(row) {
+  if (row.status === 'running') return KW_STATUS_META.running;
+  if (row.status === 'error') return KW_STATUS_META.error;
+  if (row.status === 'canceled') return KW_STATUS_META.canceled;
+  if (row.exhausted) return KW_STATUS_META.exhausted;
+  return KW_STATUS_META.done;
+}
 
 function resultKey(entry) {
   const r = (entry.result || '').toLowerCase();
@@ -51,25 +66,48 @@ function StatCard({ icon, label, value, hint, valueClass = 'text-white' }) {
   );
 }
 
+function HistoryRow({ entry }) {
+  const k = resultKey(entry);
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-3 sm:px-4 py-3 border-b border-white/5 last:border-0">
+      <span className="text-xs text-ph-text-muted tabular-nums whitespace-nowrap sm:w-44 shrink-0">
+        {entry.time ? new Date(entry.time).toLocaleString('zh-CN', { hour12: false }) : '—'}
+      </span>
+      <span className="text-sm text-white font-medium truncate flex-1 min-w-0">
+        {entry.source || '本地索引'}
+      </span>
+      <span className="text-xs text-ph-text-tertiary hidden sm:inline shrink-0">
+        {entry.op || '全量同步'}
+      </span>
+      <Tag color={RESULT_TAG_COLOR[k]} className="!m-0 !text-[10px] !font-black !rounded-lg w-fit">
+        {RESULT_LABEL[k]}
+      </Tag>
+      <span className="text-xs text-ph-text-secondary tabular-nums sm:w-20 sm:text-right shrink-0">
+        {entry.elapsed || '—'}
+      </span>
+    </div>
+  );
+}
+
 export default function SyncCenterView({
   sites,
   siteCounts,
   itemsCount,
   syncHistory,
   lastSyncAt,
-  syncing,
+  isSyncing,
   elapsed = 0,
   onTriggerSync,
-  keywordSyncing,
+  isKeywordSyncing,
   keywordResults,
   onStartKeywordSync,
   onCancelKeywordSync,
 }) {
   const [keywords, setKeywords] = useState('');
 
-  const sourceCards = useMemo(() => {
-    return (sites || [])
-      .filter((s) => s && s.url && s.enabled !== false)
+  const sourceCards = useMemo(() => (
+    (sites || [])
+      .filter((s) => s?.url && s.enabled !== false)
       .map((s) => ({
         key: s.url,
         name: s.name || s.url,
@@ -77,71 +115,23 @@ export default function SyncCenterView({
         permanentUrl: s.permanentUrl,
         permanentLabel: s.permanentLabel,
         count: siteCounts.get(s.url) || 0,
-      }));
-  }, [sites, siteCounts]);
+      }))
+  ), [sites, siteCounts]);
 
   const lastSyncLabel = (() => {
     if (!lastSyncAt) return '尚未同步';
     const d = new Date(lastSyncAt);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    return `${hh}:${mm}`;
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   })();
   const lastSyncDate = lastSyncAt ? formatDate(lastSyncAt) : '—';
-
   const syncElapsedLabel = formatElapsedShort(elapsed);
-
-  const columns = [
-    {
-      title: '时间',
-      dataIndex: 'time',
-      key: 'time',
-      width: 180,
-      render: (t) => (
-        <span className="tabular-nums text-ph-text-secondary whitespace-nowrap">
-          {t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '—'}
-        </span>
-      ),
-    },
-    {
-      title: '数据源',
-      dataIndex: 'source',
-      key: 'source',
-      render: (s) => <span className="text-white font-medium">{s || '本地索引'}</span>,
-    },
-    {
-      title: '操作',
-      dataIndex: 'op',
-      key: 'op',
-      render: (o) => <span className="text-ph-text-tertiary">{o || '全量同步'}</span>,
-    },
-    {
-      title: '结果',
-      dataIndex: 'result',
-      key: 'result',
-      width: 90,
-      render: (_, record) => {
-        const k = resultKey(record);
-        return <Tag color={RESULT_TAG_COLOR[k]} className="!m-0 !text-[10px] !font-black !rounded-lg">{RESULT_LABEL[k]}</Tag>;
-      },
-    },
-    {
-      title: '耗时',
-      dataIndex: 'elapsed',
-      key: 'elapsed',
-      align: 'right',
-      width: 100,
-      render: (e) => <span className="tabular-nums text-ph-text-secondary">{e || '—'}</span>,
-    },
-  ];
-
-  const busy = syncing || keywordSyncing;
+  const isBusy = isSyncing || isKeywordSyncing;
 
   return (
     <PageShell>
       <PageBanner
         largeIcon
-        icon={<SyncOutlined className="text-xl" spin={syncing} />}
+        icon={<SyncOutlined className="text-xl" spin={isSyncing} />}
         title="同步日志"
         subtitle="查看多节点同步记录与索引拉取状态"
         actions={(
@@ -149,15 +139,13 @@ export default function SyncCenterView({
             type="primary"
             size="large"
             onClick={onTriggerSync}
-            disabled={syncing}
+            disabled={isSyncing}
             icon={<PlayCircleFilled style={{ fontSize: 16 }} />}
             className={`!inline-flex !items-center !font-black !border-0 shrink-0 ${
-              syncing ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
+              isSyncing ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
             }`}
           >
-            {syncing
-              ? `同步中 ${syncElapsedLabel}`
-              : '立即全量同步'}
+            {isSyncing ? `同步中 ${syncElapsedLabel}` : '立即全量同步'}
           </Button>
         )}
       />
@@ -199,13 +187,13 @@ export default function SyncCenterView({
         </Col>
         <Col {...STAT_RESPONSIVE} className="mb-3 sm:mb-4">
           <StatCard
-            icon={<ExclamationCircleOutlined className={syncing ? 'text-ph-orange' : 'text-emerald-400'} style={{ fontSize: 16 }} />}
+            icon={<ExclamationCircleOutlined className={isSyncing ? 'text-ph-orange' : 'text-emerald-400'} style={{ fontSize: 16 }} />}
             label="同步状态"
-            value={syncing ? '运行中' : '就绪'}
-            valueClass={syncing ? 'text-ph-orange' : 'text-emerald-400'}
+            value={isSyncing ? '运行中' : '就绪'}
+            valueClass={isSyncing ? 'text-ph-orange' : 'text-emerald-400'}
             hint={(
               <div className="text-[10px] text-ph-text-muted font-bold tabular-nums">
-                {syncing ? `已运行 ${syncElapsedLabel}` : '队列空闲'}
+                {isSyncing ? `已运行 ${syncElapsedLabel}` : '队列空闲'}
               </div>
             )}
           />
@@ -237,11 +225,11 @@ export default function SyncCenterView({
                       <div className="min-w-0">
                         <div className="text-sm font-bold text-white truncate">{src.name}</div>
                         <div className="text-[10px] text-ph-text-muted font-mono truncate">{src.url}</div>
-                      {src.permanentUrl && (
-                        <div className="text-[10px] text-ph-text-tertiary font-mono truncate" title={`失效时可据永久发布页（${src.permanentLabel || ''}）更新 url`}>
-                          永久地址：{src.permanentUrl}{src.permanentLabel ? `（${src.permanentLabel}）` : ''}
-                        </div>
-                      )}
+                        {src.permanentUrl && (
+                          <div className="text-[10px] text-ph-text-tertiary font-mono truncate" title={`失效时可据永久发布页（${src.permanentLabel || ''}）更新 url`}>
+                            永久地址：{src.permanentUrl}{src.permanentLabel ? `（${src.permanentLabel}）` : ''}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <Badge status="success" text={<span className="text-[10px] font-black text-emerald-400">在线</span>} />
@@ -281,27 +269,27 @@ export default function SyncCenterView({
             placeholder="输入关键词，多个用逗号分隔，例：关键词1,关键词2"
             value={keywords}
             onChange={(e) => setKeywords(e.target.value)}
-            disabled={busy}
+            disabled={isBusy}
             allowClear
             className="!bg-ph-card !border-white/10 !text-white flex-1"
             onPressEnter={() => {
-              if (!busy && keywords.trim()) onStartKeywordSync(keywords);
+              if (!isBusy && keywords.trim()) onStartKeywordSync(keywords);
             }}
           />
           <Button
             type="primary"
             size="middle"
             onClick={() => onStartKeywordSync(keywords)}
-            disabled={busy || !keywords.trim()}
-            loading={keywordSyncing}
-            icon={!keywordSyncing ? <PlusOutlined /> : undefined}
+            disabled={isBusy || !keywords.trim()}
+            loading={isKeywordSyncing}
+            icon={!isKeywordSyncing ? <PlusOutlined /> : undefined}
             className={`!font-black !border-0 shrink-0 ${
-              busy || !keywords.trim() ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
+              isBusy || !keywords.trim() ? '' : '!bg-ph-orange hover:!bg-ph-orange-light !text-black'
             }`}
           >
-            {keywordSyncing ? '同步中…' : '开始同步'}
+            {isKeywordSyncing ? '同步中…' : '开始同步'}
           </Button>
-          {keywordSyncing && (
+          {isKeywordSyncing && (
             <Button
               size="middle"
               danger
@@ -319,37 +307,25 @@ export default function SyncCenterView({
             <div className="text-xs font-bold text-ph-text-tertiary">同步结果：</div>
             <div className="flex flex-wrap gap-2">
               {keywordResults.map((r) => {
-                const color = r.status === 'error' ? 'error'
-                  : r.status === 'canceled' ? 'default'
-                  : r.status === 'running' ? 'processing'
-                  : r.exhausted ? 'warning'
-                  : 'success';
-                const icon = r.status === 'running'
-                  ? <LoadingOutlined style={{ fontSize: 11 }} spin />
-                  : (r.status === 'error' || r.status === 'canceled')
-                    ? <CloseCircleOutlined style={{ fontSize: 11 }} />
-                    : <CheckCircleOutlined style={{ fontSize: 11 }} />;
-                const statusText = r.status === 'running' ? '进行中'
-                  : r.status === 'error' ? '失败'
-                  : r.status === 'canceled' ? '已取消'
-                  : r.exhausted ? '已抓完'
-                  : '完成';
+                const meta = keywordStatusMeta(r);
+                let icon = <CheckCircleOutlined style={{ fontSize: 11 }} />;
+                if (meta.icon === 'running') {
+                  icon = <LoadingOutlined style={{ fontSize: 11 }} spin />;
+                } else if (meta.icon === 'error') {
+                  icon = <CloseCircleOutlined style={{ fontSize: 11 }} />;
+                }
                 return (
                   <Tag
                     key={r.keyword}
-                    color={color}
+                    color={meta.color}
                     className="!flex !items-center !gap-1.5 !px-2.5 !py-1 !m-0 !text-xs !font-bold !rounded-lg"
                   >
                     {icon}
                     <span>{r.keyword}</span>
-                    <span className="text-[10px] opacity-80">{statusText}</span>
-                    {r.added > 0 && (
-                      <span className="text-[10px] tabular-nums">+{r.added}</span>
-                    )}
+                    <span className="text-[10px] opacity-80">{meta.text}</span>
+                    {r.added > 0 && <span className="text-[10px] tabular-nums">+{r.added}</span>}
                     {r.error && (
-                      <span className="text-[10px] opacity-70 truncate max-w-[160px]" title={r.error}>
-                        {r.error}
-                      </span>
+                      <span className="text-[10px] opacity-70 truncate max-w-[160px]" title={r.error}>{r.error}</span>
                     )}
                   </Tag>
                 );
@@ -361,54 +337,24 @@ export default function SyncCenterView({
 
       <section className="space-y-4">
         <h2 className="section-title">同步日志</h2>
-        <div className="hidden md:block surface-card overflow-hidden">
-          <Table
-            columns={columns}
-            dataSource={syncHistory}
-            rowKey={(_, idx) => idx}
-            size="small"
-            pagination={false}
-            locale={{
-              emptyText: (
-                <div className="py-10 text-center text-ph-text-muted">
-                  暂无同步记录，点击「立即全量同步」开始第一次抓取
-                </div>
-              ),
-            }}
-            footer={syncHistory.length > 0
-              ? () => (
-                  <div className="px-4 py-3 border-t border-white/5 flex items-center justify-between text-[11px] text-ph-text-muted">
-                    <span>显示最近 {syncHistory.length} 条记录</span>
-                  </div>
-                )
-              : undefined}
-          />
-        </div>
-        <div className="md:hidden space-y-2">
+        <div className="surface-card overflow-hidden">
           {syncHistory.length === 0 ? (
-            <div className="py-10 text-center text-ph-text-muted surface-card">
+            <div className="py-10 text-center text-ph-text-muted">
               暂无同步记录，点击「立即全量同步」开始第一次抓取
             </div>
           ) : (
             <>
-              {syncHistory.map((entry, idx) => {
-                const k = resultKey(entry);
-                return (
-                  <div key={idx} className="surface-card p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-ph-text-muted tabular-nums">
-                        {entry.time ? new Date(entry.time).toLocaleString('zh-CN', { hour12: false }) : '—'}
-                      </span>
-                      <Tag color={RESULT_TAG_COLOR[k]} className="!m-0 !text-[10px] !font-black !rounded-lg">{RESULT_LABEL[k]}</Tag>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="text-white font-medium truncate">{entry.source || '本地索引'}</span>
-                      <span className="text-ph-text-tertiary tabular-nums shrink-0">{entry.elapsed || '—'}</span>
-                    </div>
-                  </div>
-                );
-              })}
-              <div className="px-1 py-2 text-[11px] text-ph-text-muted">
+              <div className="hidden sm:flex items-center gap-4 px-4 py-2 border-b border-white/5 text-[11px] font-bold uppercase tracking-wider text-ph-text-muted">
+                <span className="w-44 shrink-0">时间</span>
+                <span className="flex-1">数据源</span>
+                <span className="shrink-0">操作</span>
+                <span className="w-14 shrink-0">结果</span>
+                <span className="w-20 text-right shrink-0">耗时</span>
+              </div>
+              {syncHistory.map((entry, idx) => (
+                <HistoryRow key={idx} entry={entry} />
+              ))}
+              <div className="px-4 py-3 border-t border-white/5 text-[11px] text-ph-text-muted">
                 显示最近 {syncHistory.length} 条记录
               </div>
             </>

@@ -3,12 +3,11 @@ import { Spin, Empty, Typography, Row, Col, Button } from 'antd';
 import VideoCard from '../components/VideoCard.jsx';
 import TagFilterBar from '../components/TagFilterBar.jsx';
 import PageShell from '../components/PageShell.jsx';
-import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
+import { resolveSiteName } from '../utils/sites.js';
 import { CARD_GUTTER, CARD_RESPONSIVE } from '../constants/layout.js';
+import { PAGE_SIZE } from '../constants/timing.js';
 
 const { Text } = Typography;
-
-const PAGE_SIZE = 60;
 
 function SkeletonGrid({ count = 12 }) {
   return (
@@ -39,15 +38,14 @@ function SkeletonGrid({ count = 12 }) {
 export default function HomeView({
   items,
   favIds,
-  sites,
+  siteNameMap,
   tagList = [],
-  loadingList,
+  isLoadingList,
   activeTag,
   onTagChange,
   onCardClick,
   onToggleFavorite,
 }) {
-  const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef(null);
 
@@ -108,7 +106,7 @@ export default function HomeView({
       ) : null}
 
       <div className="home-page-body">
-        {!loadingList && filtered.length > 0 && (
+        {!isLoadingList && filtered.length > 0 && (
           <div className="toolbar-meta mb-2">
             <span>
               {activeTag ? (
@@ -119,10 +117,10 @@ export default function HomeView({
           </div>
         )}
 
-        {loadingList && items.length === 0 ? (
+        {isLoadingList && items.length === 0 ? (
           <SkeletonGrid />
         ) : (
-          <Spin spinning={loadingList && items.length > 0} tip="正在加载…">
+          <Spin spinning={isLoadingList && items.length > 0} tip="正在加载…">
             {filtered.length === 0 ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -144,7 +142,7 @@ export default function HomeView({
                         item={item}
                         index={i}
                         onClick={onCardClick}
-                        favorited={favIds.has(item.id)}
+                        isFavorited={favIds.has(item.id)}
                         onToggleFavorite={onToggleFavorite}
                         siteName={resolveSiteName(item.siteUrl, siteNameMap)}
                       />
@@ -161,7 +159,8 @@ export default function HomeView({
                       加载更多（还有 {filtered.length - paged.length} 条）
                     </Button>
                   </div>
-                ) : filtered.length > PAGE_SIZE ? (
+                ) : null}
+                {!hasMore && filtered.length > PAGE_SIZE ? (
                   <p className="text-center text-xs text-ph-text-tertiary py-6 m-0">
                     已全部加载 · 共 {filtered.length} 条
                   </p>

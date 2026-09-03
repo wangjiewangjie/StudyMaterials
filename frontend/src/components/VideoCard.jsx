@@ -1,11 +1,12 @@
 import { useState, useCallback, memo } from 'react';
-import { Card, Tag } from 'antd';
+import { Tag } from 'antd';
 import {
   StarOutlined, StarFilled, PlayCircleFilled, PictureOutlined,
 } from '@ant-design/icons';
-import { formatDate, hostnameOf } from '../services/api.js';
+import { formatDate } from '../utils/format.js';
+import { hostnameOf } from '../utils/sites.js';
 
-function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, showFavBadge = false, siteName }) {
+function VideoCardBase({ item, onClick, isFavorited, onToggleFavorite, index = 0, showFavBadge = false, siteName }) {
   const thumb = item.coverUrl ? `/api/cover/${item.id}` : '';
   const hasVideo = !!(item.video && item.video.url);
   const [imgOk, setImgOk] = useState(!!thumb);
@@ -13,7 +14,7 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
   const handleClick = useCallback(() => onClick(item), [item, onClick]);
   const handleFav = useCallback((e) => {
     e.stopPropagation();
-    if (onToggleFavorite) onToggleFavorite(item);
+    onToggleFavorite?.(item);
   }, [item, onToggleFavorite]);
   const handleKey = useCallback((e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -22,22 +23,16 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
     }
   }, [item, onClick]);
 
-  const sourceLabel = siteName || (() => {
-    if (!item.siteUrl) return '未知来源';
-    const host = hostnameOf(item.siteUrl);
-    return host || '未知来源';
-  })();
+  const sourceLabel = siteName
+    || (item.siteUrl ? (hostnameOf(item.siteUrl) || '未知来源') : '未知来源');
 
   return (
-    <Card
-      hoverable
-      size="small"
+    <div
       role="button"
       tabIndex={0}
-      aria-label={(item.title || `条目 ${item.id}`) + (hasVideo ? '，可播放' : '，无法播放')}
-      className="video-card group overflow-hidden !rounded !bg-ph-card !border-white/5 focus-visible:!border-ph-orange focus-visible:outline-none rise-in card-scale"
+      aria-label={`${item.title || `条目 ${item.id}`}${hasVideo ? '，可播放' : '，无法播放'}`}
+      className="video-card group overflow-hidden rounded bg-ph-card border border-white/5 cursor-pointer focus-visible:border-ph-orange focus-visible:outline-none rise-in card-scale hover:border-white/15 transition-colors"
       style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
-      styles={{ body: { padding: 0 } }}
       onClick={handleClick}
       onKeyDown={handleKey}
     >
@@ -60,14 +55,14 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
 
         <button
           type="button"
-          title={favorited ? '取消收藏' : '加入收藏'}
-          aria-label={favorited ? '取消收藏' : '加入收藏'}
+          title={isFavorited ? '取消收藏' : '加入收藏'}
+          aria-label={isFavorited ? '取消收藏' : '加入收藏'}
           onClick={handleFav}
           className={`fav-icon-btn absolute top-2 right-2 z-[2] p-0 m-0 border-0 bg-transparent leading-none cursor-pointer drop-shadow-[0_1px_2px_rgba(0,0,0,.8)] ${
-            favorited ? 'text-ph-orange' : 'text-white/90 hover:text-ph-orange'
+            isFavorited ? 'text-ph-orange' : 'text-white/90 hover:text-ph-orange'
           }`}
         >
-          {favorited
+          {isFavorited
             ? <StarFilled style={{ fontSize: 18 }} />
             : <StarOutlined style={{ fontSize: 18 }} />}
         </button>
@@ -106,7 +101,7 @@ function VideoCardBase({ item, onClick, favorited, onToggleFavorite, index = 0, 
           </div>
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 

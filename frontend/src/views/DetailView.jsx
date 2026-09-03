@@ -1,13 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Button, Tag, Row, Col, Image } from 'antd';
+import { useEffect, useMemo, useState, lazy, Suspense } from 'react';
+import { Button, Tag, Row, Col, Spin } from 'antd';
 import {
   ArrowLeftOutlined, StarFilled, StarOutlined, LinkOutlined,
 } from '@ant-design/icons';
-import VideoPlayer from '../VideoPlayer.jsx';
 import VideoCard from '../components/VideoCard.jsx';
 import PageShell from '../components/PageShell.jsx';
-import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
+import { resolveSiteName } from '../utils/sites.js';
 import { REC_GUTTER, REC_RESPONSIVE } from '../constants/layout.js';
+import { SIMILAR_LIMIT } from '../constants/timing.js';
+
+// 播放器含 artplayer + hls.js（~700KB），仅详情页挂载时再加载
+const VideoPlayer = lazy(() => import('../VideoPlayer.jsx'));
+
+function PlayerFallback() {
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-ph-header">
+      <Spin size="large" />
+    </div>
+  );
+}
 
 function resolveVideos(item) {
   if (Array.isArray(item.videos) && item.videos.length) {
@@ -33,15 +44,33 @@ function fallbackBlocks(content, images) {
 }
 
 function ThumbImage({ itemId, index }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const src = `/api/image/${itemId}/${index}`;
   return (
-    <Image
-      src={`/api/image/${itemId}/${index}`}
-      alt={`配图 ${index + 1}`}
-      loading="lazy"
-      className="!object-cover"
-      rootClassName="detail-thumb"
-      wrapperClassName="!block overflow-hidden rounded border border-white/5 bg-ph-elevated detail-thumb-wrap"
-    />
+    <>
+      <button
+        type="button"
+        className="block w-full overflow-hidden rounded border border-white/5 bg-ph-elevated detail-thumb-wrap p-0 m-0 cursor-zoom-in"
+        onClick={() => setIsOpen(true)}
+      >
+        <img
+          src={src}
+          alt={`配图 ${index + 1}`}
+          loading="lazy"
+          className="object-cover w-full h-full detail-thumb"
+        />
+      </button>
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-[1000] bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
+          onClick={() => setIsOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <img src={src} alt={`配图 ${index + 1}`} className="max-w-full max-h-full object-contain" />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -79,9 +108,9 @@ function MetaHeader({ item, localCategory, localTags, onTagClick }) {
 export default function DetailView({
   item,
   items,
-  sites,
+  siteNameMap,
   favIds,
-  favorited,
+  isFavorited,
   onToggleFavorite,
   onBack,
   onCardClick,
@@ -111,7 +140,6 @@ export default function DetailView({
     setLocalVideos(resolveVideos(item));
   }, [item]);
 
-  const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
   const sourceName = useMemo(
     () => resolveSiteName(item.siteUrl, siteNameMap),
     [item.siteUrl, siteNameMap]
@@ -141,43 +169,35 @@ export default function DetailView({
       if (seen.has(it.id)) continue;
       seen.add(it.id);
       out.push(it);
-      if (out.length >= 4) break;
+      if (out.length >= SIMILAR_LIMIT) break;
     }
     return out;
   }, [items, item.id, localCategory, localTags]);
 
   const handleTags = (newTags, newCategory, _datePublished, extra) => {
-    if (newTags && newTags.length) setLocalTags(newTags);
+    if (newTags?.length) setLocalTags(newTags);
     if (newCategory) setLocalCategory(newCategory);
-    if (extra && typeof extra.content === 'string' && extra.content) {
+    if (typeof extra?.content === 'string' && extra.content) {
       setLocalContent(extra.content);
     }
-    if (extra && Array.isArray(extra.images) && extra.images.length) {
+    if (Array.isArray(extra?.images) && extra.images.length) {
       setLocalImages(extra.images);
     }
-    if (extra && Array.isArray(extra.blocks) && extra.blocks.length) {
+    if (Array.isArray(extra?.blocks) && extra.blocks.length) {
       setLocalBlocks(extra.blocks);
-    } else if (extra && (extra.content || extra.images)) {
+    } else if (extra?.content || extra?.images) {
       setLocalBlocks(fallbackBlocks(
         extra.content || localContent,
-        extra.images || localImages
+        extra.images || localImages,
       ));
     }
-    if (extra && Array.isArray(extra.videos) && extra.videos.length) {
-      const next = extra.videos.filter((v) => v && v.url);
-      if (next.length) {
-        // 仅在视频地址确实变更时更新 — 防止
-        // VideoPlayer 重新挂载（导致 ready/loading 状态间闪烁）
-        const oldUrls = localVideos.map((v) => v.url).join('\n');
-        const newUrls = next.map((v) => v.url).join('\n');
-        if (oldUrls !== newUrls) setLocalVideos(next);
-      }
-    }
-  };
-
-  // 把 refresh 的 blocks 传回
-  const handleTagsWithBlocks = (tags, category, datePublished, extra) => {
-    handleTags(tags, category, datePublished, extra);
+    // 仅在视频地址确实变更时更新，避免播放器因 props 抖动重挂载
+    if (!Array.isArray(extra?.videos) || !extra.videos.length) return;
+    const next = extra.videos.filter((v) => v?.url);
+    if (!next.length) return;
+    const oldUrls = localVideos.map((v) => v.url).join('\n');
+    const newUrls = next.map((v) => v.url).join('\n');
+    if (oldUrls !== newUrls) setLocalVideos(next);
   };
 
   return (
@@ -213,31 +233,28 @@ export default function DetailView({
           <Button
             size="small"
             onClick={() => onToggleFavorite(item)}
-            icon={favorited
+            icon={isFavorited
               ? <StarFilled style={{ color: '#FF9900', fontSize: 13 }} />
               : <StarOutlined style={{ fontSize: 13 }} />}
             className={`!inline-flex !items-center !font-bold !border ${
-              favorited
+              isFavorited
                 ? '!bg-ph-orange/15 !text-ph-orange !border-ph-orange/35 hover:!bg-ph-orange/25'
                 : '!bg-white/5 !text-ph-text-secondary !border-white/10 hover:!bg-white/10'
             }`}
           >
-            {favorited ? '已收藏' : '收藏'}
+            {isFavorited ? '已收藏' : '收藏'}
           </Button>
         </div>
       </div>
 
-      <Image.PreviewGroup>
+      <>
         {!isMulti ? (
           <>
-            {/* 单视频：播放器置顶 + 下方文案/缩略图 */}
             <div className="relative z-0 w-full aspect-video rounded-none overflow-hidden border border-white/5 shadow-2xl bg-ph-header">
               {primaryVideo ? (
-                <VideoPlayer
-                  item={item}
-                  video={primaryVideo}
-                  onTags={handleTagsWithBlocks}
-                />
+                <Suspense fallback={<PlayerFallback />}>
+                  <VideoPlayer item={item} video={primaryVideo} onTags={handleTags} />
+                </Suspense>
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-ph-text-muted text-sm">
                   该条目暂无可播放地址
@@ -319,38 +336,41 @@ export default function DetailView({
                           {v.title}
                         </div>
                       ) : null}
-                      <VideoPlayer
-                        item={item}
-                        video={v}
-                        onTags={block.index === 0 ? handleTagsWithBlocks : undefined}
-                        defer={block.index > 0}
-                        autoplay={block.index === 0}
-                      />
+                      <Suspense fallback={<PlayerFallback />}>
+                        <VideoPlayer
+                          item={item}
+                          video={v}
+                          onTags={block.index === 0 ? handleTags : undefined}
+                          defer={block.index > 0}
+                          autoplay={block.index === 0}
+                        />
+                      </Suspense>
                     </div>
                   );
                 }
                 return null;
               })}
 
-              {/* blocks 里没有视频锚点时，仍按顺序列出全部视频 */}
               {!localBlocks.some((b) => b.type === 'video') && localVideos.map((v, idx) => (
                 <div
                   key={`fallback-v-${idx}`}
                   className="relative z-0 w-full overflow-hidden border border-white/5 bg-ph-header shadow-xl"
                 >
-                  <VideoPlayer
-                    item={item}
-                    video={v}
-                    onTags={idx === 0 ? handleTagsWithBlocks : undefined}
-                    defer={idx > 0}
-                    autoplay={idx === 0}
-                  />
+                  <Suspense fallback={<PlayerFallback />}>
+                    <VideoPlayer
+                      item={item}
+                      video={v}
+                      onTags={idx === 0 ? handleTags : undefined}
+                      defer={idx > 0}
+                      autoplay={idx === 0}
+                    />
+                  </Suspense>
                 </div>
               ))}
             </div>
           </>
         )}
-      </Image.PreviewGroup>
+      </>
 
       {similar.length > 0 && (
         <section className="space-y-4 overflow-x-hidden">
@@ -362,7 +382,7 @@ export default function DetailView({
                   item={it}
                   index={i}
                   onClick={onCardClick}
-                  favorited={favIds.has(it.id)}
+                  isFavorited={favIds.has(it.id)}
                   onToggleFavorite={onToggleFavorite}
                   siteName={resolveSiteName(it.siteUrl, siteNameMap)}
                 />

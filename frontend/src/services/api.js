@@ -1,4 +1,5 @@
 // 后端请求封装（fetchXxx / syncXxx）；调用方自行处理 loading / 错误
+// 纯工具函数见 utils/format.js、utils/sites.js
 
 async function postJSON(url, body, signal) {
   const res = await fetch(url, {
@@ -7,7 +8,6 @@ async function postJSON(url, body, signal) {
     body: JSON.stringify(body),
     signal,
   });
-  // 后端未启动时可能落到 SPA 返回 HTML
   const ct = res.headers.get('content-type') || '';
   if (!ct.includes('application/json')) {
     const text = await res.text().catch(() => '');
@@ -45,7 +45,6 @@ export async function removeFavorite(id) {
   return res.json();
 }
 
-/** 批量清空所有收藏（一次请求，替代逐条 DELETE） */
 export async function clearAllFavoritesAPI() {
   const res = await fetch('/api/favorites', { method: 'DELETE' });
   return res.json();
@@ -78,34 +77,4 @@ export async function fetchTags(signal) {
   const res = await fetch('/api/tags', { signal });
   if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
   return res.json();
-}
-
-export function hostnameOf(siteUrl) {
-  if (!siteUrl) return '';
-  try {
-    return new URL(siteUrl).hostname;
-  } catch (_) {
-    return String(siteUrl);
-  }
-}
-
-export function buildSiteNameMap(sites) {
-  const m = new Map();
-  (sites || []).forEach((s) => {
-    if (s && s.url) m.set(s.url, s.name || s.url);
-  });
-  return m;
-}
-
-export function resolveSiteName(siteUrl, siteNameMap) {
-  if (!siteUrl) return '未知来源';
-  if (siteNameMap && siteNameMap.has(siteUrl)) return siteNameMap.get(siteUrl);
-  const host = hostnameOf(siteUrl);
-  return host || siteUrl;
-}
-
-export function formatDate(iso) {
-  if (!iso) return '';
-  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 }

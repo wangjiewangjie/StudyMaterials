@@ -16,27 +16,53 @@ const { isPromoDetailText } = require('./lib/detail-noise');
 const { writeFailureReport, setFailureLogPath } = require('./lib/crawl-failure-log');
 const permanentResolver = require('./lib/permanent-resolve');
 
-// 站点项：{ url, name, todayPath, enabled, archiveSuffix?, permanentUrl?, permanentLabel? }
-//   permanentUrl   可选：站点「永久地址/发布页」。当前 url 失效时，据永久页确认最新可用线路，
-//                  再把 url 手工改成该线路即可（源站域名常更换，改配置不动代码）。
-//   permanentLabel 可选：标记默认采用哪条线路，如：线路一。
-// 备注（各站永久地址情况）：
-//   - 91吃瓜：永久发布页 https://91cg.asia/（线路一~六）；注意线路为页面 JS 动态生成，需浏览器渲染查看，
-//     且不同线路域名解析情况随时变化，故不自动改写、由人工按永久页确认。
-//   - 黑料网：站内「地址发布页」/github.html（同源，站挂即不可用）；51吃瓜/黑料不打烊：站内「回家的路」页面。
-//   - 51fans：最新地址通过邮箱 51fanswang@gmail.com 索取；51爆料：未见独立永久地址。
+// 站点项：{ url, name, todayPath, enabled, archiveSuffix?, permanentUrl?, permanentLabel?, lines? }
+//   permanentUrl   可选：站点「永久地址/发布页」。当前 url 失效时，渲染永久页取「线路一」
+//                  （不可达则依次兜底），自动改写 url 并回写 output/sites.json。
+//   permanentLabel 可选：优先采用的线路标记，默认「线路一」。
+//   lines          可选：最近一次从永久页解析到的线路列表（label/host/url），便于排查。
+// 发布页（2026-09）：
+//   91吃瓜 https://91cg.asia/ · 91视频 https://sjahkniw.cc/ · 51fans https://fans51.com/
+//   51视频 https://jccbgvjtj.cc/ · 51吃瓜 https://51cg800.com/ · 51爆料 https://51bl.info/
+//   吃瓜网 https://cgw48.com/ · 每日大赛 https://mrdsk.com/ · 黑料不打烊 https://hlbdy27.com/
 const SITES_PATH = path.join(__dirname, 'output', 'sites.json');
 const DEFAULT_SITE_CONFIGS = [
   {
-    url: 'https://armed.izbfsaxh.cc', name: '91吃瓜', todayPath: '/category/zxcghl/',
+    url: 'https://age.nuxaojbu.cc/', name: '91吃瓜', todayPath: '/category/zxcghl/',
     permanentUrl: 'https://91cg.asia/', permanentLabel: '线路一', enabled: true,
   },
-  { url: 'https://d1ve8vvwughzqa.cloudfront.net', name: '91视频', todayPath: '/category/jrxw1/', enabled: false },
-  { url: 'https://breast.eiejvjgex.cc', name: '51fans', todayPath: '/order/today/', enabled: true },
-  { url: 'https://assert.pbtiodqn.cc', name: '51爆料', todayPath: '/category/jrbl/', enabled: true },
-  { url: 'https://band.hkllewakv.cc', name: '51吃瓜', todayPath: '/category/wpcz/', enabled: true },
-  { url: 'https://d6lvl8l2l26yp.cloudfront.net', name: '黑料网', todayPath: '/category/wpcz/', enabled: true },
-  { url: 'https://wiki.lgbtoexf.cc', name: '黑料不打烊', todayPath: '/category/24hcg/', archiveSuffix: '.html', enabled: true },
+  {
+    url: 'https://je8vz1.zplaojtx.cc/', name: '91视频', todayPath: '/category/jrxw1/',
+    permanentUrl: 'https://sjahkniw.cc/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://am.yhcxifcxt.com/', name: '51fans', todayPath: '/order/today/',
+    permanentUrl: 'https://fans51.com/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://brain.qneedqncy.cc/', name: '51视频', todayPath: '/category/wpcz/',
+    permanentUrl: 'https://jccbgvjtj.cc/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://body.zwcstqjv.cc/', name: '51爆料', todayPath: '/category/jrbl/',
+    permanentUrl: 'https://51bl.info/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://apply.zhdzruirc.cc/', name: '51吃瓜', todayPath: '/category/wpcz/',
+    permanentUrl: 'https://51cg800.com/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://adviser.uwzzrtzy.cc/', name: '吃瓜网', todayPath: '/category/jrxw1/',
+    permanentUrl: 'https://cgw48.com/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://cabinet.xfmryuljz.com/', name: '每日大赛', todayPath: '/category/mrds/',
+    permanentUrl: 'https://mrdsk.com/', permanentLabel: '线路一', enabled: true,
+  },
+  {
+    url: 'https://act.wejaybrs.cc/', name: '黑料不打烊', todayPath: '/category/24hcg/', archiveSuffix: '.html',
+    permanentUrl: 'https://hlbdy27.com/', permanentLabel: '线路一', enabled: true,
+  },
 ];
 
 function loadSiteConfigs() {
@@ -67,7 +93,16 @@ let SITE_TODAY_PATH = {};
 let SITE_ARCHIVE_SUFFIX = {};
 let BASE_URL = '';
 
+/** 站点根地址统一去掉尾斜杠，避免拼出 //archives 或 //action/player */
+function normalizeSiteUrl(url) {
+  return String(url || '').trim().replace(/\/+$/, '');
+}
+
 function rebuildSiteMaps() {
+  // 规范化写回配置副本字段，避免调用方持有旧尾斜杠引用时行为不一致
+  for (const s of SITE_CONFIGS) {
+    if (s && s.url) s.url = normalizeSiteUrl(s.url);
+  }
   const enabled = SITE_CONFIGS.filter((s) => s.enabled !== false);
   SITES = enabled.map((s) => s.url);
   SITE_TODAY_PATH = {};
@@ -258,44 +293,93 @@ const siteBreaker = new SiteCircuitBreaker();
 // ---------- 永久地址自动切换 ----------
 // 站点失效（熔断）时，若其配置了 permanentUrl，用无头浏览器渲染永久页解析「线路一」
 // 并校验可达后自动改写 url（配置持久化 + 立即 reloadSites），下次抓取即用新线路。
-// 线路一不可达时依次兜底其余线路；全部不可达或不满足冷却则不切换，避免把站点切到坏线路。
-let failoverRunning = false;
-let failoverLastAttempt = 0;
-const FAILOVER_COOLDOWN_MS = 5 * 60 * 1000; // 5 分钟内最多触发一次，避免频繁拉起无头浏览器
+// 冷却与单飞按「站点名」隔离，避免一站切换挡住其它站。
+const failoverLocks = new Map(); // name -> true
+const failoverLastAttemptByName = new Map(); // name -> ts
+const FAILOVER_COOLDOWN_MS = 5 * 60 * 1000;
 
 function findSiteConfig(site) {
-  return getSiteConfigs().find((s) => s.url === site) || null;
+  const needle = normalizeSiteUrl(site);
+  return getSiteConfigs().find((s) => normalizeSiteUrl(s.url) === needle) || null;
+}
+
+/** 把索引里旧 siteUrl / 归档域名批量改成新线路（换线后 Referer/解密/站名才一致） */
+function remapIndexSiteUrls(jsonPath, oldUrl, newUrl) {
+  const from = normalizeSiteUrl(oldUrl);
+  const to = normalizeSiteUrl(newUrl);
+  if (!from || !to || from === to) return 0;
+  let articles;
+  try {
+    articles = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  } catch (_) {
+    return 0;
+  }
+  if (!Array.isArray(articles) || !articles.length) return 0;
+  let n = 0;
+  for (const a of articles) {
+    if (normalizeSiteUrl(a.siteUrl) === from) {
+      a.siteUrl = to;
+      n += 1;
+    }
+    if (a.url && typeof a.url === 'string' && a.url.includes(from)) {
+      a.url = a.url.replace(from, to);
+    }
+  }
+  if (n > 0) saveIndex(jsonPath, articles);
+  return n;
 }
 
 /**
  * 据永久地址尝试自动切换站点线路。返回 { attempted, switched, reason?, oldUrl?, newUrl?, label? }。
- * opts.force 可绕过冷却期（供手动接口立即触发），并发锁 failoverRunning 始终生效。
- * 该函数可能较慢（启动无头浏览器渲染），由调用方决定是否阻塞。
+ * opts.force 可绕过冷却期（供手动接口立即触发）；同站并发锁始终生效。
  */
 async function autoFailover(siteCfg, opts = {}) {
   if (!siteCfg || !siteCfg.permanentUrl) return { attempted: false, reason: '未配置永久地址' };
-  if (failoverRunning) return { attempted: false, reason: '已有切换任务进行中' };
-  if (!opts.force && Date.now() - failoverLastAttempt < FAILOVER_COOLDOWN_MS) {
+  const lockKey = siteCfg.name || normalizeSiteUrl(siteCfg.url) || siteCfg.permanentUrl;
+  if (failoverLocks.get(lockKey)) return { attempted: false, reason: '该站已有切换任务进行中' };
+  const lastAt = failoverLastAttemptByName.get(lockKey) || 0;
+  if (!opts.force && Date.now() - lastAt < FAILOVER_COOLDOWN_MS) {
     return { attempted: false, reason: '处于冷却期' };
   }
-  failoverRunning = true;
-  failoverLastAttempt = Date.now();
+  failoverLocks.set(lockKey, true);
+  failoverLastAttemptByName.set(lockKey, Date.now());
   const oldUrl = siteCfg.url;
   try {
     const resolved = await permanentResolver.resolveSiteLine(siteCfg);
     if (!resolved) return { attempted: true, switched: false, reason: '永久页各线路均不可达' };
-    if (resolved.lineUrl === oldUrl) return { attempted: true, switched: false, reason: '已是该线路' };
-    siteCfg.url = resolved.lineUrl;
+    if (normalizeSiteUrl(resolved.lineUrl) === normalizeSiteUrl(oldUrl)) {
+      if (resolved.candidates && resolved.candidates.length) {
+        siteCfg.lines = resolved.candidates.map((l) => ({
+          label: l.label, order: l.order, host: l.host, url: l.url || `https://${l.host}/`,
+        }));
+        saveSiteConfigs(getSiteConfigs());
+      }
+      return { attempted: true, switched: false, reason: '已是该线路' };
+    }
+    const newUrl = normalizeSiteUrl(resolved.lineUrl);
+    siteCfg.url = newUrl;
+    if (resolved.candidates && resolved.candidates.length) {
+      siteCfg.lines = resolved.candidates.map((l) => ({
+        label: l.label, order: l.order, host: l.host, url: l.url || `https://${l.host}/`,
+      }));
+    }
     saveSiteConfigs(getSiteConfigs());
     reloadSites();
     siteBreaker.recordSuccess(oldUrl);
-    warnSiteFailure(oldUrl, `网址失效，已自动切换${resolved.label} → ${resolved.lineUrl}`);
-    return { attempted: true, switched: true, oldUrl, newUrl: resolved.lineUrl, label: resolved.label };
+    // 同步改写正式索引中的旧域名（若存在）
+    try {
+      const remapped = remapIndexSiteUrls(path.join(__dirname, 'output', 'index.json'), oldUrl, newUrl);
+      if (remapped > 0) {
+        console.warn(`\x1b[33m[永久地址] ${siteCfg.name} 已回写索引 siteUrl ${remapped} 条\x1b[0m`);
+      }
+    } catch (_) { /* 索引回写失败不阻断切换 */ }
+    warnSiteFailure(oldUrl, `网址失效，已自动切换${resolved.label} → ${newUrl}`);
+    return { attempted: true, switched: true, oldUrl, newUrl, label: resolved.label };
   } catch (e) {
     warnSiteFailure(oldUrl, `自动切换失败: ${e.message || e}`);
     return { attempted: true, switched: false, reason: e.message || String(e) };
   } finally {
-    failoverRunning = false;
+    failoverLocks.delete(lockKey);
   }
 }
 
@@ -397,7 +481,7 @@ function parseListPage(html, siteUrl) {
     const $card = $a.find('.post-card').first();
     if ($card.length) {
       const m = ($card.html() || '').match(COVER_BANNER_RE);
-      if (m) coverUrl = m[0];
+      if (m) coverUrl = m[1];
     }
 
     const title = $a.find('.post-card-title').text().replace(/\s+/g, ' ').trim();
@@ -686,30 +770,149 @@ async function resolveVideoEntry(siteUrl, video, log) {
 /** 从 player 接口响应提取 m3u8（兼容 data 为字符串或数组） */
 function extractPlayerUrl(resp) {
   const d = resp && resp.data;
-  if (typeof d === 'string') return d;
+  if (typeof d === 'string') {
+    // ArtPlayer 加密接口：data 为 AES 密文，不是直链
+    if (/^https?:\/\//i.test(d) || d.includes('.m3u8')) return d;
+    return null;
+  }
   if (Array.isArray(d) && d[0]) return d[0].url || null;
   return (d && d.url) || null;
 }
 
-/** 将 player 接口解析为真实 m3u8；get_play_url 需先取 ticket，失败时退避重试一次 */
+// ArtPlayer 环境评分取流：密钥与前端 artplayer-plugin-authentication 一致
+const PLAYER_ENC_KEY = (() => {
+  try {
+    const CryptoJS = require('crypto-js');
+    return {
+      CryptoJS,
+      key: CryptoJS.enc.Utf8.parse('2acf7e91e9864673'),
+      iv: CryptoJS.enc.Utf8.parse('1c29882d3ddfcfd6'),
+      signKey: '5589d41f92a597d016b037ac37db243d',
+    };
+  } catch (_) {
+    return null;
+  }
+})();
+
+function buildPlayerEnvPayload() {
+  return {
+    ua: UA,
+    webdriver: false,
+    isHeadlessUA: false,
+    languages: ['zh-CN', 'zh', 'en'],
+    pluginsCount: 5,
+    mimeTypesCount: 4,
+    hc: 8,
+    dm: 8,
+    dpr: 1,
+    touchPoints: 0,
+    screen: {
+      width: 1920, height: 1080, availWidth: 1920, availHeight: 1040,
+      colorDepth: 24, pixelDepth: 24,
+    },
+    tzOffset: -480,
+    tzName: 'Asia/Shanghai',
+    cookiesEnabled: true,
+    storage: { local: true, session: true },
+    score: 92,
+    label: '自然/低风险',
+    reasons: ['Canvas 渲染稳定 +2', '插件 ≥2 +2', '多语言 +2'],
+    hevc_supported: false,
+    hevc_state: 'unknown',
+    hevc_engine: 'h264',
+    behavior: '',
+    verify: false,
+  };
+}
+
+function playerMakeSign(object, signKey, CryptoJS) {
+  const sorted = {};
+  Object.keys(object).sort().forEach((k) => { sorted[k] = object[k]; });
+  const parts = [];
+  for (const k of Object.keys(sorted)) {
+    let val = sorted[k];
+    if (k === 'data') val = String(sorted[k]).replace(/ /g, '+');
+    parts.push(`${k}=${val}`);
+  }
+  const tmp = parts.join('&') + signKey;
+  return CryptoJS.MD5(CryptoJS.SHA256(tmp).toString()).toString();
+}
+
+/** ArtPlayer 加密环境 POST → 解密得到 m3u8；失败返回 null */
+async function resolveEncryptedPlayUrl(fullUrl, headers, log) {
+  if (!PLAYER_ENC_KEY) return null;
+  const { CryptoJS, key, iv, signKey } = PLAYER_ENC_KEY;
+  const encryptedData = CryptoJS.AES.encrypt(
+    JSON.stringify(buildPlayerEnvPayload()),
+    key,
+    { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+  ).toString();
+  const apiRequestData = {
+    data: encryptedData,
+    timestamp: Date.now(),
+    _ver: 'v1',
+  };
+  apiRequestData.sign = playerMakeSign(apiRequestData, signKey, CryptoJS);
+  const body = new URLSearchParams();
+  Object.entries(apiRequestData).forEach(([k, v]) => body.append(k, String(v)));
+  const pRes = await client.post(fullUrl, body.toString(), {
+    headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const resp = typeof pRes.data === 'string' ? JSON.parse(pRes.data) : pRes.data;
+  if (!resp || resp.status !== 0 || !resp.data) {
+    log(`  [播放器] 加密取流失败 (msg="${(resp && resp.msg) || '空'}", status=${resp && resp.status})`);
+    return null;
+  }
+  const raw = resp.data;
+  if (typeof raw === 'string' && /^https?:\/\//i.test(raw)) return raw;
+  if (typeof raw === 'string') {
+    const plain = CryptoJS.enc.Utf8.stringify(
+      CryptoJS.AES.decrypt(raw, key, { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 })
+    );
+    if (plain && /^https?:\/\//i.test(plain)) return plain;
+  }
+  if (typeof raw === 'object' && raw.url) return raw.url;
+  return null;
+}
+
+/** 将 player 接口解析为真实 m3u8；优先 ArtPlayer 加密取流，再回退 ticket 流程 */
 async function resolvePlayerUrl(siteUrl, playerPath, log) {
-  const fullUrl = playerPath.startsWith('http') ? playerPath : siteUrl + playerPath;
-  const headers = headersFor(siteUrl);
-  const needsTicket = fullUrl.includes('/get_play_url');
+  const fullUrl = playerPath.startsWith('http')
+    ? playerPath
+    : `${normalizeSiteUrl(siteUrl)}${playerPath.startsWith('/') ? '' : '/'}${playerPath}`;
+  const headers = headersFor(normalizeSiteUrl(siteUrl));
+  const isActionPlay = fullUrl.includes('/get_play_url');
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       let resp;
-      if (needsTicket) {
-        const ticketUrl = fullUrl.replace('/get_play_url', '/ticket');
-        const tRes = await getWithRetry(ticketUrl, client, 2, headers);
-        const tData = typeof tRes.data === 'string' ? JSON.parse(tRes.data) : tRes.data;
-        const ticket = tData && tData.data && tData.data.ticket;
-        if (!ticket) {
-          log(`  [播放器] ticket 失败 (${(tData && tData.msg) || '无 ticket'}): ${ticketUrl}`);
-          return null;
+      if (isActionPlay) {
+        // 1) 新版 ArtPlayer：加密环境指纹 POST（91视频等）
+        try {
+          const encUrl = await resolveEncryptedPlayUrl(fullUrl, headers, log);
+          if (encUrl) {
+            log(`  [播放器] 已解析（加密环境）: ${encUrl.slice(0, 80)}`);
+            return encUrl;
+          }
+        } catch (encErr) {
+          log(`  [播放器] 加密取流异常 (${formatRequestError(encErr)})，尝试 ticket`);
         }
-        log(`  [播放器] ticket 成功 (ttl=${tData.data.ttl}s) cid=${(fullUrl.match(/cid=(\d+)/) || [])[1] || '?'}`);
+
+        // 2) 旧版 ticket → POST
+        const ticketUrl = fullUrl.replace('/get_play_url', '/ticket');
+        let ticket = null;
+        try {
+          const tRes = await getWithRetry(ticketUrl, client, 2, headers);
+          const tData = typeof tRes.data === 'string' ? JSON.parse(tRes.data) : tRes.data;
+          ticket = tData && tData.data && tData.data.ticket;
+          if (!ticket) {
+            log(`  [播放器] ticket 失败 (${(tData && tData.msg) || '无 ticket'}): ${ticketUrl}`);
+          }
+        } catch (tErr) {
+          log(`  [播放器] ticket 不可用 (${formatRequestError(tErr)})`);
+        }
+        if (!ticket) return null;
+        log(`  [播放器] ticket 成功 cid=${(fullUrl.match(/cid=(\d+)/) || [])[1] || '?'}`);
         const body = new URLSearchParams();
         body.append('ticket', ticket);
         body.append('env', JSON.stringify({ source: 'web', ua: UA }));
@@ -723,7 +926,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
       }
       const url = extractPlayerUrl(resp);
       if (url) {
-        log(`  [播放器] 已解析${needsTicket ? '（ticket）' : ''}: ${url.slice(0, 80)}`);
+        log(`  [播放器] 已解析${isActionPlay ? '（ticket）' : ''}: ${url.slice(0, 80)}`);
         return url;
       }
       const msg = (resp && resp.msg) || '';
@@ -732,7 +935,7 @@ async function resolvePlayerUrl(siteUrl, playerPath, log) {
         await sleep(1500 + Math.floor(Math.random() * 1000));
         continue;
       }
-      log(`  [播放器] 无地址 (msg="${msg || '空'}", status=${resp && resp.status}) ${needsTicket ? 'POST' : 'GET'} ${fullUrl}`);
+      log(`  [播放器] 无地址 (msg="${msg || '空'}", status=${resp && resp.status}) ${isActionPlay ? 'POST' : 'GET'} ${fullUrl}`);
       return null;
     } catch (err) {
       const code = err.code || (err.response && err.response.status) || '';
@@ -781,14 +984,20 @@ async function mapWithConcurrency(items, limit, mapper) {
 
 let _indexCache = null;
 let _indexCachePath = null;
+let _indexCacheMtime = -1;
 
 function loadIndex(jsonPath) {
-  if (_indexCache && _indexCachePath === jsonPath) return _indexCache;
   try {
+    const mtime = fs.statSync(jsonPath).mtimeMs;
+    if (_indexCache && _indexCachePath === jsonPath && mtime === _indexCacheMtime) {
+      return _indexCache;
+    }
     _indexCache = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     _indexCachePath = jsonPath;
+    _indexCacheMtime = mtime;
     return _indexCache;
   } catch (_) {
+    if (_indexCache && _indexCachePath === jsonPath) return _indexCache;
     return [];
   }
 }
@@ -797,12 +1006,11 @@ function saveIndex(jsonPath, articles) {
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   _indexCache = articles;
   _indexCachePath = jsonPath;
-  fs.writeFile(jsonPath, JSON.stringify(articles, null, 2), 'utf8', (err) => {
-    if (err) {
-      // 异步写入失败；回退到同步写入以防数据丢失
-      try { fs.writeFileSync(jsonPath, JSON.stringify(articles, null, 2), 'utf8'); } catch (_) {}
-    }
-  });
+  // 紧凑 JSON：体积更小、写入更快；原子写避免半截文件
+  const tmp = `${jsonPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(articles), 'utf8');
+  fs.renameSync(tmp, jsonPath);
+  try { _indexCacheMtime = fs.statSync(jsonPath).mtimeMs; } catch (_) { _indexCacheMtime = Date.now(); }
 }
 
 /** 合并进索引：新/更新条目置顶，按 id 去重，旧条目保留 */
@@ -1025,6 +1233,10 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null) 
   }
 
   for (const site of SITES) {
+    // 只保留每站前 minArticles 条，避免第 1 页就超额时拖垮详情抓取
+    if (siteArticles[site].length > minArticles) {
+      siteArticles[site] = siteArticles[site].slice(0, minArticles);
+    }
     log(`[每站最低] ${site}: ${siteArticles[site].length} 条`);
   }
   return dedupeById(SITES.flatMap((site) => siteArticles[site]));
@@ -1237,6 +1449,8 @@ async function crawl(opts = {}) {
       log(`  [详情] ${a.id} ${resolvedVideos.length} 个视频 | 图片 ${(a.images || []).length} 张 | ${(a.title || '').slice(0, 40)}`);
     } catch (err) {
       log(`  [详情] ${a.id} 失败: ${formatRequestError(err)}`);
+      // 详情失败且没有任何可用视频/标题时不入库，避免污染索引
+      if (!(a.video && a.video.url) && !(a.videos && a.videos.length) && !a.title) return;
     }
 
     // 详情后按排除规则决定是否入库；命中则跳过推送
@@ -1244,6 +1458,8 @@ async function crawl(opts = {}) {
       a._excluded = true;
       return;
     }
+    // 无视频且无标题的空壳不推送
+    if (!(a.video && a.video.url) && !(a.videos && a.videos.length) && !a.title) return;
     await queuePush(a);
   });
 
@@ -1369,9 +1585,9 @@ if (require.main === module) {
 }
 
 module.exports = {
-  crawl, parseDetailPage, resolvePlayerUrl, loadIndex,
-  UA,
+  crawl, parseDetailPage, resolvePlayerUrl, loadIndex, saveIndex,
+  UA, normalizeSiteUrl,
   getSiteConfigs, getSites, getBaseUrl,
   setFailureLogPath, flushFailureReport, formatRequestError,
-  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig,
+  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig, remapIndexSiteUrls,
 };

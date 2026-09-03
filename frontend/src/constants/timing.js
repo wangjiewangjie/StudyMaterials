@@ -1,0 +1,8 @@
+/** 同步 / 加载相关时序常量（毫秒） */
+export const SYNC_TICK_MS = 1000;
+export const SYNC_BATCH_POLL_MS = 5000;
+export const SYNC_RESET_DELAY_MS = 800;
+export const SYNC_MODAL_AUTO_CLOSE_MS = 1200;
+export const HISTORY_MAX = 20;
+export const SIMILAR_LIMIT = 4;
+export const PAGE_SIZE = 60;

@@ -6,7 +6,7 @@ import {
 import VideoCard from '../components/VideoCard.jsx';
 import PageShell from '../components/PageShell.jsx';
 import PageBanner from '../components/PageBanner.jsx';
-import { buildSiteNameMap, resolveSiteName } from '../services/api.js';
+import { resolveSiteName } from '../utils/sites.js';
 import { CARD_GUTTER, CARD_RESPONSIVE } from '../constants/layout.js';
 
 const { Text } = Typography;
@@ -19,7 +19,7 @@ const SORT_OPTIONS = [
 export default function FavoritesView({
   favorites,
   favIds,
-  sites,
+  siteNameMap,
   query,
   onQueryChange,
   onCardClick,
@@ -29,7 +29,6 @@ export default function FavoritesView({
 }) {
   const [sort, setSort] = useState('recent');
   const [confirmClear, setConfirmClear] = useState(false);
-  const siteNameMap = useMemo(() => buildSiteNameMap(sites), [sites]);
 
   const filtered = useMemo(() => {
     const qlc = (query || '').trim().toLowerCase();
@@ -140,7 +139,7 @@ export default function FavoritesView({
                   item={item}
                   index={i}
                   onClick={onCardClick}
-                  favorited={favIds.has(item.id)}
+                  isFavorited={favIds.has(item.id)}
                   onToggleFavorite={onToggleFavorite}
                   showFavBadge
                   siteName={resolveSiteName(item.siteUrl, siteNameMap)}
