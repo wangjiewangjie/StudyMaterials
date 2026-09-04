@@ -57,6 +57,20 @@ npm -v
 
 ---
 
+## 下载安装（推荐普通用户）
+
+无需 Node 环境，下载即用：
+
+[![下载 Windows 安装包](https://img.shields.io/badge/download-Windows_Setup-2ea44f?logo=windows)](https://github.com/wangjiewangjie/StudyMaterials/releases/download/v1.0.0/StudyMaterials-Setup-1.0.0.exe)
+
+- 安装包：`StudyMaterials-Setup-1.0.0.exe`（Windows x64，NSIS）
+- 全部版本：[Releases](https://github.com/wangjiewangjie/StudyMaterials/releases)
+- 数据保存在本机 `%APPDATA%\学习资料\`，卸载不会删除
+
+开发者或需要绿色版时，再从源码构建，见下文「桌面端（Electron）」。
+
+---
+
 ## 快速开始（命令行）
 
 ### 1. 获取代码
