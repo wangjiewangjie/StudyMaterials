@@ -278,10 +278,10 @@ export function useSync(message, onSyncDone, onBatch) {
       for (const row of newResults) {
         if (row.status === 'error') {
           message?.error(`关键词「${row.keyword}」同步失败：${row.error}`);
-        } else if (row.exhausted) {
-          message?.warning(`关键词「${row.keyword}」已全部抓取完成，没有更多数据`);
         } else if (row.added > 0) {
           message?.success(`关键词「${row.keyword}」新增 ${row.added} 条`);
+        } else if (row.exhausted) {
+          message?.warning(`关键词「${row.keyword}」已全部抓取完成，没有更多数据`);
         }
       }
 

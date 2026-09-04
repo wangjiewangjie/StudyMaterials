@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { filterSiteBrandTags, isSiteBrandTag } = require('./lib/tags');
@@ -101,6 +102,22 @@ let SITES = [];
 let SITE_TODAY_PATH = {};
 let SITE_ARCHIVE_SUFFIX = {};
 let BASE_URL = '';
+// host -> 站点哈希键：同一站点的所有线路（含永久页线路）映射到同一键，
+// 换线后 siteUrl 变化但文章 ID 保持稳定
+let HOST_SITE_KEY = {};
+
+/** 站点稳定键：对站点名做 sha1 取 6 位 hex，ID 形如 "121952-a3f2c1" */
+function siteKeyForName(name) {
+  return crypto.createHash('sha1').update(String(name || ''), 'utf8').digest('hex').slice(0, 6);
+}
+
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (_) {
+    return null;
+  }
+}
 
 /** 站点根地址统一去掉尾斜杠，避免拼出 //archives 或 //action/player */
 function normalizeSiteUrl(url) {
@@ -116,9 +133,16 @@ function rebuildSiteMaps() {
   SITES = enabled.map((s) => s.url);
   SITE_TODAY_PATH = {};
   SITE_ARCHIVE_SUFFIX = {};
+  HOST_SITE_KEY = {};
   for (const s of enabled) {
     if (s.todayPath) SITE_TODAY_PATH[s.url] = s.todayPath;
     SITE_ARCHIVE_SUFFIX[s.url] = s.archiveSuffix || '/';
+    const key = siteKeyForName(s.name || s.url);
+    const hosts = [s.url, s.permanentUrl, ...(Array.isArray(s.lines) ? s.lines.map((l) => l && l.url) : [])];
+    for (const h of hosts) {
+      const host = hostnameOf(h);
+      if (host) HOST_SITE_KEY[host] = key;
+    }
   }
   BASE_URL = SITES[0] || '';
 }
@@ -163,6 +187,18 @@ function normalizeArchiveUrl(href) {
   return m ? { id: m[1] } : null;
 }
 
+/** 旧版纯数字 ID 判断（无站点哈希后缀） */
+function isLegacyArticleId(id) {
+  return /^\d+$/.test(String(id || ''));
+}
+
+/** 跨站唯一文章 ID：<数字ID>-<站点哈希>，避免不同站点数字 ID 撞车互相覆盖 */
+function computeArticleId(numericId, siteUrl) {
+  const host = hostnameOf(siteUrl);
+  const key = (host && HOST_SITE_KEY[host]) || siteKeyForName(host || siteUrl);
+  return `${numericId}-${key}`;
+}
+
 function archiveUrl(site, id) {
   const suffix = SITE_ARCHIVE_SUFFIX[site] || '/';
   return `${site}/archives/${id}${suffix}`;
@@ -201,7 +237,8 @@ function articleContentDateStr(article) {
 
 function searchUrl(site, keyword, pageNum) {
   const enc = encodeURIComponent(keyword);
-  return pageNum <= 1 ? `${site}/search/${enc}/` : `${site}/search/${enc}/page/${pageNum}/`;
+  // 主题真实分页格式为 /search/<kw>/<n>/（页面 rel=next 佐证），带 page/ 前缀一律 404
+  return pageNum <= 1 ? `${site}/search/${enc}/` : `${site}/search/${enc}/${pageNum}/`;
 }
 
 /** 同源 Referer / Origin */
@@ -266,8 +303,10 @@ async function getWithRetry(url, httpClient = client, retries = 4, extraHeaders 
 
 // ---------- 站点级断路器 ----------
 // 连续失败 N 次后标记站点为"熔断"，一段时间内跳过该站，避免持续打已挂的站点。
+// 阈值取 2：单轮抓取对同一站只记 1 次失败（失败即标耗尽跳过），阈值过高会导致
+// 站点已死却迟迟不触发永久地址自动切换（旧值 5 需连续 5 轮抓取，常被客户端重启清零）。
 class SiteCircuitBreaker {
-  constructor(threshold = 5, cooldownMs = 60000) {
+  constructor(threshold = 2, cooldownMs = 60000) {
     this.threshold = threshold;
     this.cooldownMs = cooldownMs;
     this.failures = new Map();  // site → 连续失败计数
@@ -494,7 +533,7 @@ function parseListPage(html, siteUrl) {
     }
 
     const title = $a.find('.post-card-title').text().replace(/\s+/g, ' ').trim();
-    pushArticle({ id: norm.id, url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
+    pushArticle({ id: computeArticleId(norm.id, siteUrl), url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
   });
 
   // 主题 2：xqbj-list-rows（breast/51fans）— .xqbj-list-rows a[href*="/archives/"]
@@ -513,7 +552,7 @@ function parseListPage(html, siteUrl) {
       if (m) coverUrl = m[0];
     }
 
-    pushArticle({ id: norm.id, url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
+    pushArticle({ id: computeArticleId(norm.id, siteUrl), url: archiveUrl(siteUrl, norm.id), siteUrl, title, coverUrl });
   });
 
   return articles;
@@ -1051,6 +1090,56 @@ function mergeIntoIndex(existing, incoming) {
   return { merged, added, updated: incoming.length - added };
 }
 
+/**
+ * 一次性迁移：旧版纯数字 ID 升级为「数字-站点哈希」复合 ID。
+ * - 重命名 details/<旧ID>.json -> details/<新ID>.json
+ * - 重写 index.json（原子写）
+ * - 返回 oldId -> newId 映射，供调用方迁移收藏/播放进度等旁路数据
+ * 幂等：新格式条目自动跳过。
+ */
+function migrateLegacyArticleIds(jsonPath) {
+  const idMap = new Map();
+  const seenNewIds = new Set();
+  if (!fs.existsSync(jsonPath)) return { changed: false, idMap };
+  const articles = loadIndex(jsonPath);
+  for (const a of articles) {
+    if (!a || !isLegacyArticleId(a.id) || !a.siteUrl) continue;
+    const nid = computeArticleId(a.id, a.siteUrl);
+    if (seenNewIds.has(nid)) {
+      // 迁移后 ID 撞车（如同名站点配置重复）：保留首条
+      console.warn(`[迁移] 迁移后 ID 重复 ${nid}，仅保留首条`);
+      continue;
+    }
+    seenNewIds.add(nid);
+    idMap.set(a.id, nid);
+  }
+  if (!idMap.size) return { changed: false, idMap };
+
+  for (const [oldId, newId] of idMap) {
+    const from = articleStore.detailPath(oldId);
+    const to = articleStore.detailPath(newId);
+    try {
+      if (fs.existsSync(from)) {
+        if (fs.existsSync(to)) {
+          console.warn(`[迁移] details/${newId}.json 已存在，跳过重命名`);
+        } else {
+          fs.renameSync(from, to);
+        }
+      }
+    } catch (e) {
+      console.warn(`[迁移] details/${oldId}.json 重命名失败: ${e.message}`);
+    }
+  }
+
+  for (const a of articles) {
+    const nid = idMap.get(a.id);
+    if (nid) a.id = nid;
+  }
+  saveIndex(jsonPath, articles);
+  console.log(`[迁移] 索引 ID 已升级为站点哈希格式：${idMap.size} 条`);
+  return { changed: true, idMap };
+}
+
 // ---------- 多站聚合抓取 ----------
 
 /** 按 id 去重，保留先出现的条目 */
@@ -1166,49 +1255,72 @@ async function fetchTodayPerSiteWithFallback(log) {
   }, log);
 }
 
-/** 按站翻页直到凑满 minArticles；无新增或 404 则标记耗尽 */
 /** 按站翻页直到凑满 minArticles；无新增或 404 则标记耗尽。
- *  pageUrl(site, pageNum) 可注入搜索 URL，从而支持关键词每站 N 条。 */
-async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null) {
+ *  pageUrl(site, pageNum) 可注入搜索 URL，从而支持关键词每站 N 条。
+ *  opts.knownIds（关键词增量模式）：目标只统计索引外新增条数——
+ *  已知页不停、继续向后翻（逐轮加深），新内容天然被吸收；
+ *  起始页恒为第 1 页，页码不做续抓锚点，规避站点更新导致的分页漂移。 */
+async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null, opts = {}) {
+  const knownIds = opts.knownIds || null;
   const buildUrl = pageUrl || ((site, p) => listPageUrl(site, p));
   const siteArticles = {};
   const siteIds = {};
+  const siteNew = {};
   const exhaustedSites = new Set();
+  // 站点结束原因：'404' | 'empty'（真实耗尽）| 'maxpages' | 'breaker'；缺省 = 达标
+  const endReason = {};
+  let deepestPage = 0;
   SITES.forEach((site) => {
     siteArticles[site] = [];
     siteIds[site] = new Set();
+    siteNew[site] = 0;
   });
+  const metTarget = (site) => (knownIds ? siteNew[site] >= minArticles : siteIds[site].size >= minArticles);
 
   for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+    deepestPage = Math.max(deepestPage, pageNum);
     let allSitesMetOrExhausted = true;
     const results = await Promise.allSettled(
       SITES.map(async (site) => {
         if (exhaustedSites.has(site)) return { site, exhausted: true };
-        if (siteBreaker.isTripped(site)) return { site, exhausted: true };
-        if (siteIds[site].size >= minArticles) return { site, met: true };
+        if (siteBreaker.isTripped(site)) {
+          endReason[site] = 'breaker';
+          return { site, exhausted: true };
+        }
+        if (metTarget(site)) return { site, met: true };
         log(`[每站最低] ${site} 第 ${pageNum} 页`);
         try {
           const res = await getWithRetry(buildUrl(site, pageNum), client, 3, headersFor(site));
           siteBreaker.recordSuccess(site);
           const arts = parseListPage(res.data, site);
           let newCount = 0;
+          let freshCount = 0;
           for (const a of arts) {
-            if (!siteIds[site].has(a.id)) {
-              siteIds[site].add(a.id);
-              siteArticles[site].push(a);
-              newCount++;
-            }
+            if (siteIds[site].has(a.id)) continue;
+            siteIds[site].add(a.id);
+            newCount++;
+            // 已入库条目不收集（详情不重抓），但计入翻页去重与空页判断
+            if (knownIds && knownIds.has(a.id)) continue;
+            siteArticles[site].push(a);
+            freshCount++;
+            if (knownIds) siteNew[site]++;
           }
           if (newCount === 0) {
             log(`  [${site}] 第 ${pageNum} 页 -> 0 条新增，站点已耗尽`);
+            endReason[site] = 'empty';
             return { site, exhausted: true, newCount: 0, total: siteArticles[site].length };
+          }
+          if (knownIds) {
+            log(`  [${site}] 第 ${pageNum} 页 -> 新增 ${newCount} 条（索引外 ${freshCount} 条），索引外累计 ${siteNew[site]} 条`);
           }
           return { site, met: false, newCount, total: siteArticles[site].length };
         } catch (err) {
           const is404 = err.response && err.response.status === 404;
           if (is404) {
             log(`  [${site}] 第 ${pageNum} 页 -> 404，站点已耗尽`);
+            endReason[site] = '404';
           } else {
+            endReason[site] = 'breaker';
             const newlyTripped = siteBreaker.recordFailure(site);
             log(`  [${site}] 第 ${pageNum} 页失败: ${formatRequestError(err)}${newlyTripped ? '（断路器已熔断）' : ''}`);
             if (newlyTripped) {
@@ -1235,11 +1347,11 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null) 
           }
         } else if (v.met) {
           // 站点已达到最低数量要求
-        } else {
+        } else if (!knownIds) {
           log(`  [${site}] 第 ${pageNum} 页 -> 新增 ${v.newCount} 条，共 ${v.total} 条`);
         }
         // 检查站点是否仍需更多文章
-        if (!exhaustedSites.has(site) && siteIds[site].size < minArticles) {
+        if (!exhaustedSites.has(site) && !metTarget(site)) {
           allSitesMetOrExhausted = false;
         }
       } else {
@@ -1255,14 +1367,26 @@ async function fetchMinPerSite(minArticles, log, maxPages = 10, pageUrl = null) 
     if (pageNum < maxPages) await sleep(50);
   }
 
+  // 未达标且未耗尽的站点：本轮受页数上限约束
+  for (const site of SITES) {
+    if (!exhaustedSites.has(site) && !metTarget(site) && !endReason[site]) endReason[site] = 'maxpages';
+  }
+
   for (const site of SITES) {
     // 只保留每站前 minArticles 条，避免第 1 页就超额时拖垮详情抓取
     if (siteArticles[site].length > minArticles) {
       siteArticles[site] = siteArticles[site].slice(0, minArticles);
     }
-    log(`[每站最低] ${site}: ${siteArticles[site].length} 条`);
+    log(`[每站最低] ${site}: ${siteArticles[site].length} 条${knownIds ? '（本轮索引外新增）' : ''}`);
   }
-  return dedupeById(SITES.flatMap((site) => siteArticles[site]));
+  // 全部站点以 404/空页结束 = 站点真实耗尽（区别于页数上限/熔断）
+  const allExhausted = SITES.length > 0
+    && SITES.every((site) => endReason[site] === '404' || endReason[site] === 'empty');
+  return {
+    articles: dedupeById(SITES.flatMap((site) => siteArticles[site])),
+    deepestPage,
+    allExhausted,
+  };
 }
 
 /** 按内容日期过滤：仅保留与列表来源日（今日/回退日）一致的条目 */
@@ -1331,6 +1455,10 @@ async function crawl(opts = {}) {
   const addUnique = (a) => {
     if (!collectedIds.has(a.id)) { collectedIds.add(a.id); newArticles.push(a); }
   };
+  // 关键词增量模式：已入库 ID 快照（列表翻页凑数 + 详情跳过均依赖）
+  let keywordKnownIds = null;
+  let minSiteDeepestPage = 0;
+  let minSiteAllExhausted = false;
 
   // 每站最低 N 条：list（首页/启动/标签）与 search（关键词）通用
   if (minPerSite > 0) {
@@ -1339,7 +1467,18 @@ async function crawl(opts = {}) {
     const pageUrl = isSearch
       ? (site, p) => searchUrl(site, searchKeyword, p)
       : (site, p) => listPageUrl(site, p);
-    const minArts = await fetchMinPerSite(minPerSite, log, 10, pageUrl);
+    if (isSearch) {
+      // 增量：只统计索引外新增凑数（逐轮加深）；页码上限仅控制单轮开销
+      keywordKnownIds = new Set(loadIndex(jsonPath).map((a) => (a && a.id) || '').filter(Boolean));
+      log(`索引已有 ${keywordKnownIds.size} 条，本轮跳过已入库条目的详情抓取`);
+    }
+    const maxPagesToUse = opts.maxPagesPerSite || 10;
+    const collected = await fetchMinPerSite(minPerSite, log, maxPagesToUse, pageUrl, {
+      knownIds: keywordKnownIds,
+    });
+    minSiteDeepestPage = collected.deepestPage;
+    minSiteAllExhausted = collected.allExhausted;
+    const minArts = collected.articles;
     if (isSearch) {
       // 关键词结果置顶：逆序 unshift，既放到最前面又保持原顺序（先抓到的排前）
       for (let j = minArts.length - 1; j >= 0; j--) {
@@ -1382,6 +1521,13 @@ async function crawl(opts = {}) {
     log(`已限制为 ${limit} 条`);
   }
 
+  // 安全兜底：关键词增量模式下已入库条目不进入详情抓取（fetchMinPerSite 已过滤）
+  if (keywordKnownIds) {
+    for (let i = newArticles.length - 1; i >= 0; i--) {
+      if (keywordKnownIds.has(newArticles[i].id)) newArticles.splice(i, 1);
+    }
+  }
+
   // 按标题预过滤，避免浪费详情页请求在被排除的内容上
   filterExcluded(newArticles, 'title', log);
 
@@ -1391,7 +1537,7 @@ async function crawl(opts = {}) {
     const existing = loadIndex(jsonPath);
     log('无文章可抓取，无需操作。');
     flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { crawled: 0 } });
-    return { added: 0, total: existing.length, crawled: 0 };
+    return { added: 0, total: existing.length, crawled: 0, exhausted: minSiteAllExhausted, deepestPage: minSiteDeepestPage };
   }
 
   // 2. 抓取详情页 -> 提取视频地址 + 标签 + 分类 + 真实封面 + 正文
@@ -1506,7 +1652,7 @@ async function crawl(opts = {}) {
     const existing = loadIndex(jsonPath);
     log('过滤后无剩余文章，保留现有索引。');
     flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { crawled: 0 } });
-    return { added: 0, total: existing.length, updated: 0, crawled: 0 };
+    return { added: 0, total: existing.length, updated: 0, crawled: 0, exhausted: minSiteAllExhausted, deepestPage: minSiteDeepestPage };
   }
 
   if (replace) {
@@ -1518,21 +1664,24 @@ async function crawl(opts = {}) {
     const withVideo = newArticles.filter((a) => a.video && a.video.url).length;
     log(`完成（替换模式）。共 ${newArticles.length} 条 | ${withVideo} 条含视频地址 | 分批已推 ${flushedCount}`);
     flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { added: newArticles.length, total: newArticles.length } });
-    return { added: newArticles.length, total: newArticles.length, updated: 0, crawled: newArticles.length };
+    return { added: newArticles.length, total: newArticles.length, updated: 0, crawled: newArticles.length, exhausted: minSiteAllExhausted, deepestPage: minSiteDeepestPage };
   }
 
   // merge 模式：分批已写入；再全量 merge 一次确保最终一致
   const existing = loadIndex(jsonPath);
   const { merged, added, updated } = mergeIntoIndex(existing, newArticles);
   saveIndex(jsonPath, merged);
+  // added 取最终 merge + 分批写入之和：分批先落盘的条目在最终 merge 里被计为已存在，
+  // 单看 final merge 会漏报本轮真实新增
+  const totalAdded = added + incrementalAdded;
   if (onBatch) {
-    try { await onBatch({ batch: 0, flushed: flushedCount, added, total: merged.length, final: true }); }
+    try { await onBatch({ batch: 0, flushed: flushedCount, added: totalAdded, total: merged.length, final: true }); }
     catch (_) {}
   }
   const withVideo = merged.filter((a) => a.video && a.video.url).length;
-  log(`完成（合并模式）。+${added} 新增, ~${updated} 更新 | 共 ${merged.length} 条 | ${withVideo} 条含视频地址 | 分批已推 ${flushedCount}（增量 +${incrementalAdded}）`);
-  flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { added, total: merged.length, updated } });
-  return { added, total: merged.length, updated, crawled: newArticles.length };
+  log(`完成（合并模式）。+${totalAdded} 新增, ~${updated} 更新 | 共 ${merged.length} 条 | ${withVideo} 条含视频地址 | 分批已推 ${flushedCount}（增量 +${incrementalAdded}）`);
+  flushFailureReport({ elapsedMs: Date.now() - crawlStartedAt, meta: { added: totalAdded, total: merged.length, updated } });
+  return { added: totalAdded, total: merged.length, updated, crawled: newArticles.length, exhausted: minSiteAllExhausted, deepestPage: minSiteDeepestPage };
 }
 
 // ---------- 命令行入口 ----------
@@ -1568,6 +1717,8 @@ async function main() {
   setFailureLogPath(path.resolve(outDir, 'crawl-failures.json'));
 
   reloadSites();
+  // 旧版纯数字 ID 先升级为站点哈希格式，避免与本次抓取的新格式 ID 混存
+  migrateLegacyArticleIds(path.resolve(args['save-json'] || path.join(outDir, 'index.json')));
   const t0 = Date.now();
   const timer = setInterval(() => {
     process.stdout.write(`\r爬取进行中… 已运行 ${formatElapsedSec((Date.now() - t0) / 1000)}   `);
@@ -1614,4 +1765,5 @@ module.exports = {
   getSiteConfigs, getSites, getBaseUrl,
   setFailureLogPath, flushFailureReport, formatRequestError,
   saveSiteConfigs, reloadSites, autoFailover, findSiteConfig,
+  computeArticleId, isLegacyArticleId, migrateLegacyArticleIds,
 };

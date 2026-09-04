@@ -18,7 +18,8 @@ const axios = require('axios');
 const { EventEmitter } = require('events');
 const { crawl, loadIndex, saveIndex, parseDetailPage, resolvePlayerUrl, UA,
   getSiteConfigs, getSites, getBaseUrl, setFailureLogPath, flushFailureReport, formatRequestError,
-  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig, normalizeSiteUrl } = require('./crawler');
+  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig, normalizeSiteUrl,
+  computeArticleId, isLegacyArticleId, migrateLegacyArticleIds } = require('./crawler');
 const { decryptBuffer, resetDecrypt, ensureDecryptReady } = require('./image-decrypt');
 const { normalizeUpstreamUrl } = require('./lib/hls-url');
 const { buildDisplayTags, defaultFixedPath } = require('./lib/tags');
@@ -300,6 +301,63 @@ function writeFavoritesSync(list) {
   fs.writeFileSync(FAV_PATH, JSON.stringify(list, null, 2), 'utf8');
   try { favMtimeMs = fs.statSync(FAV_PATH).mtimeMs; } catch (_) { favMtimeMs = -1; }
 }
+
+/**
+ * 一次性迁移：旧版纯数字 ID 升级为「数字-站点哈希」复合 ID。
+ * - index.json 与 details/ 由 crawler 侧迁移
+ * - 收藏（自带 siteUrl，可直接计算）与播放进度（依赖映射）在此迁移
+ * 幂等，可在启动与导入后反复调用。
+ */
+function migrateLegacyIds() {
+  try {
+    const { idMap } = migrateLegacyArticleIds(JSON_PATH);
+
+    // 收藏条目自带 siteUrl，可脱离索引直接计算新 ID
+    const favs = getFavorites();
+    let favChanged = false;
+    for (const f of favs) {
+      if (!f || typeof f.id !== 'string' || !isLegacyArticleId(f.id)) continue;
+      const nid = (f.siteUrl && computeArticleId(f.id, f.siteUrl)) || idMap.get(f.id);
+      if (nid && nid !== f.id) {
+        idMap.set(f.id, nid);
+        f.id = nid;
+        favChanged = true;
+      }
+    }
+    if (favChanged) writeFavoritesSync(favs);
+
+    // 播放进度键按 oldId -> newId 映射重写
+    const progressItems = watchProgressStore.getAll();
+    const legacyKeys = Object.keys(progressItems).filter((k) => isLegacyArticleId(k));
+    if (legacyKeys.length > 0) {
+      // 兜底：idMap 未覆盖（如早前轮次已迁移）时，按索引中新 ID 的数字段反查
+      const numericToNew = new Map();
+      for (const a of loadIndex()) {
+        const seg = typeof a.id === 'string' ? a.id.split('-')[0] : '';
+        if (seg && /^\d+$/.test(seg)) numericToNew.set(seg, a.id);
+      }
+      let progressChanged = false;
+      for (const key of legacyKeys) {
+        const nid = idMap.get(key) || numericToNew.get(key);
+        if (nid && nid !== key && progressItems[nid] === undefined) {
+          progressItems[nid] = progressItems[key];
+          delete progressItems[key];
+          progressChanged = true;
+        }
+      }
+      if (progressChanged) watchProgressStore.replaceAll(progressItems);
+    }
+
+    if (idMap.size > 0) {
+      bustIndexCache();
+      console.log(`[迁移] 收藏/播放进度 ID 已同步升级（共 ${idMap.size} 条映射）`);
+    }
+  } catch (e) {
+    console.warn('[迁移] ID 迁移失败:', e.message);
+  }
+}
+// 启动即迁移（幂等）：避免旧格式 ID 与新抓取的复合 ID 混存
+migrateLegacyIds();
 
 function toVideoItem(a) {
   const full = articleStore.hydrateArticle(a);
@@ -683,6 +741,9 @@ app.post('/api/data/import', (req, res) => {
     if (doc.fixedTags != null) {
       fs.writeFileSync(FIXED_TAGS_PATH, JSON.stringify(doc.fixedTags, null, 2), 'utf8');
     }
+
+    // 旧备份可能含纯数字 ID：站点配置就绪后统一迁移
+    migrateLegacyIds();
 
     onIndexChanged();
     favCache = null;
@@ -1220,7 +1281,7 @@ app.post('/api/sync-keywords', async (req, res) => {
     return res.status(400).json({ error: '需要关键词数组' });
   }
 
-  // 加载进度（keyword -> 已同步次数；关键词整轮抓取，不再按页增量）
+  // 加载进度（keyword -> { rounds, deepestPage, lastAt }；旧版纯数字为轮次计数）
   const progress = loadKeywordProgress();
   const logs = [`开始关键词同步: ${keywords.length} 个关键词`];
   const baselineCount = getIndex().length;
@@ -1232,11 +1293,14 @@ app.post('/api/sync-keywords', async (req, res) => {
   for (const kw of keywords) {
     const kwLogs = [`[${kw}] 开始搜索...`];
 
-    // 关键词按"每站最低 N 条"整轮抓取，progress[kw] 记录已同步次数
+    const prevRaw = progress[kw];
+    const prevProg = typeof prevRaw === 'number' ? { rounds: prevRaw } : (prevRaw || {});
+    // 页数上限随已达深度增长，仅供控制单轮开销；起始页恒为第 1 页（防分页漂移）
+    const maxPages = Math.min(40, Math.max(10, (prevProg.deepestPage || 0) + 3));
     try {
       // 用互斥锁保护 crawl 对 index.json 的读-改-写
-      // 关键词按"每站最低 KW_MIN_PER_SITE 条"逐站翻页抓取，limit 置 0 关闭全局上限，
-      // 由 fetchMinPerSite 在各站点内各自凑满/耗尽，从而保证每个站点约 50 条。
+      // 关键词按"每站最低 KW_MIN_PER_SITE 条索引外新增"逐站翻页抓取（逐轮加深），
+      // 已入库条目跳过详情重抓；limit 置 0 关闭全局上限，由 fetchMinPerSite 各站凑满/耗尽。
       const result = await withIndexLock(() => crawl({
         search: kw,
         minPerSite: KW_MIN_PER_SITE,
@@ -1246,6 +1310,7 @@ app.post('/api/sync-keywords', async (req, res) => {
         jsonPath: JSON_PATH,
         concurrency: 12,
         pushEvery: 10,
+        maxPagesPerSite: maxPages,
         onBatch: () => { onIndexChanged(); },
         onProgress: (p) => { try { syncEmitter.emit('progress', p); } catch (_) {} },
         onLog: makeOnLog('sync-keywords', kwLogs),
@@ -1254,12 +1319,18 @@ app.post('/api/sync-keywords', async (req, res) => {
 
       const crawled = result.crawled || 0;
       const added = result.added || 0;
-      const exhausted = crawled === 0;
+      // 全部站点以 404/空页结束（真实耗尽）且本轮无新增 = 该关键词已全部抓取完成
+      const exhausted = !!result.exhausted && added === 0;
 
-      // 记录该关键词已同步次数（关键词现整轮抓取，不再按页增量翻页）
-      progress[kw] = (progress[kw] || 0) + 1;
+      // 记录轮次与已达最深页：仅作展示与下轮页数上限参考，不作续抓锚点
+      const nextProg = {
+        rounds: (prevProg.rounds || 0) + 1,
+        deepestPage: Math.max(prevProg.deepestPage || 0, result.deepestPage || 0),
+        lastAt: new Date().toISOString(),
+      };
+      progress[kw] = nextProg;
 
-      kwLogs.push(`[${kw}] 完成: 抓取 ${crawled} 条, 新增 ${added} 条${exhausted ? ' (无结果)' : ''}`);
+      kwLogs.push(`[${kw}] 完成: 抓取 ${crawled} 条, 新增 ${added} 条${exhausted ? ' (已全部抓取完成)' : `，翻页至第 ${nextProg.deepestPage} 页`}`);
 
       keywordResults.push({
         keyword: kw,
@@ -1267,7 +1338,7 @@ app.post('/api/sync-keywords', async (req, res) => {
         total: result.total || 0,
         crawled,
         exhausted,
-        page: progress[kw],
+        page: nextProg.deepestPage,
         error: null,
         logs: kwLogs,
       });
@@ -1279,7 +1350,7 @@ app.post('/api/sync-keywords', async (req, res) => {
         total: 0,
         crawled: 0,
         exhausted: false,
-        page: progress[kw] || 0,
+        page: prevProg.deepestPage || 0,
         error: err.message,
         logs: kwLogs,
       });
