@@ -1,6 +1,13 @@
-// server.js — 本地 Web 服务：React 前端 + API + HLS CORS 代理。
-// 启动：node server.js（默认 http://localhost:9999）
-// 端口被占用时自动递增，实际端口写入 .server-port
+/**
+ * server.js — 本地 Web 服务
+ *
+ * 能力：静态前端（public/build）+ REST API + HLS/图片 CORS 代理 + 触发爬虫同步。
+ * 启动：node server.js | Electron require 后调用 startServer()
+ * 端口：默认 9999（PORT 可覆盖）；占用则递增；实际端口写入 DATA_DIR/.server-port
+ * 监听：0.0.0.0（本机 + 局域网）；窗口/本机用 localhost，手机扫码用 /api/access-info
+ */
+
+require('./lib/win-console-utf8');
 
 const express = require('express');
 const path = require('path');
@@ -20,23 +27,61 @@ const { sanitizeDetailBlocks, sanitizeDetailContent } = require('./lib/detail-no
 const { createSyncLogger } = require('./lib/sync-logger');
 const permanentResolver = require('./lib/permanent-resolve');
 const { APP_ROOT, DATA_DIR, ensureDataDir } = require('./lib/paths');
+const dataManage = require('./lib/data-manage');
+const watchProgressStore = require('./lib/watch-progress-store');
+const articleStore = require('./lib/article-store');
 
 const BASE_PORT = parseInt(process.env.PORT, 10) || 9999;
 const OUT_DIR = DATA_DIR;
 const PORT_FILE = path.join(OUT_DIR, '.server-port');
 const MEDIA_CACHE_DIR = path.join(OUT_DIR, 'media-cache');
 
-/** 本机局域网 IPv4（排除回环与内部虚拟网卡） */
+/** 网卡名启发式：Hyper-V / WSL / VMware / VirtualBox / Docker 等虚拟适配器 */
+const VIRTUAL_IFACE_RE = /hyper-v|vethernet|veth|docker|wsl|vmware|virtualbox|vbox|loopback|bluetooth|isatap|teredo|vpn|tap-windows|zerotier|hamachi/i;
+
+/**
+ * 判断是否更像「手机能连上的」局域网地址。
+ * 优先保留 RFC1918 私网；过滤回环、链路本地、常见虚拟网卡。
+ */
+function isPreferredLanAddress(address, ifaceName) {
+  if (!address || address.startsWith('127.') || address.startsWith('169.254.')) return false;
+  if (VIRTUAL_IFACE_RE.test(ifaceName || '')) return false;
+  // 10/8、172.16–31/12、192.168/16
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(address)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(address)) return true;
+  const m = /^172\.(\d{1,3})\./.exec(address);
+  if (m) {
+    const second = parseInt(m[1], 10);
+    return second >= 16 && second <= 31;
+  }
+  return false;
+}
+
+/**
+ * 本机可用于扫码访问的 IPv4 列表（已排除回环与常见虚拟网卡）。
+ * 排序：192.168.* 优先，其次 10.*，再 172.16–31.*，同段按字典序。
+ * @returns {string[]}
+ */
 function getLocalIPv4() {
   const nets = os.networkInterfaces();
   const ips = [];
-  for (const list of Object.values(nets)) {
+  for (const [ifaceName, list] of Object.entries(nets || {})) {
     for (const netInfo of list || []) {
       if (netInfo.family !== 'IPv4' && netInfo.family !== 4) continue;
       if (netInfo.internal) continue;
-      ips.push(netInfo.address);
+      if (!isPreferredLanAddress(netInfo.address, ifaceName)) continue;
+      if (!ips.includes(netInfo.address)) ips.push(netInfo.address);
     }
   }
+  ips.sort((a, b) => {
+    const rank = (ip) => {
+      if (ip.startsWith('192.168.')) return 0;
+      if (ip.startsWith('10.')) return 1;
+      return 2;
+    };
+    const d = rank(a) - rank(b);
+    return d !== 0 ? d : a.localeCompare(b);
+  });
   return ips;
 }
 
@@ -65,10 +110,10 @@ const BUILD_DIR = path.join(APP_ROOT, 'public', 'build');
 const PROXY_TIMEOUT_MS = parseInt(process.env.PROXY_TIMEOUT_MS, 10) || 90000;
 const REFRESH_TIMEOUT_MS = parseInt(process.env.REFRESH_TIMEOUT_MS, 10) || 60000;
 
-// 结构化同步日志单例：进程启动时清空旧日志，运行期间持续可靠写入本地 JSON 文件
-const syncLogger = createSyncLogger({ path: SYNC_LOG_PATH, flushOnExit: true });
-syncLogger.clear();                 // 重启清空旧日志
-syncLogger.installExitFlush();      // 退出前同步刷盘
+// 结构化同步日志：启动时归档上一会话（默认保留 7 天），再开新会话
+const syncLogger = createSyncLogger({ path: SYNC_LOG_PATH, flushOnExit: true, retainDays: 7 });
+syncLogger.beginSession();
+syncLogger.installExitFlush();
 
 /** 把 crawl 的 onLog 回调桥接到结构化日志：既保留原内存数组（供接口返回），也落盘 */
 function makeOnLog(scope, array) {
@@ -95,7 +140,7 @@ function requestErrorInfo(err, url) {
 }
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // 托管前端构建产物
@@ -141,25 +186,16 @@ function rebuildIdMap(articles) {
   }
 }
 
-/** 异步写索引：内存缓存立即更新；紧凑 JSON + 原子写 */
+/** 异步写索引：经 saveIndex 拆详情，保证冷热分离 */
 function writeIndexAsync(articles) {
-  indexCache = articles;
-  rebuildIdMap(articles);
-  const tmp = `${JSON_PATH}.${process.pid}.tmp`;
-  const data = JSON.stringify(articles);
-  fs.writeFile(tmp, data, 'utf8', (err) => {
-    if (err) {
-      console.warn('[索引] 异步写入失败:', err.message);
-      return;
-    }
-    fs.rename(tmp, JSON_PATH, (err2) => {
-      if (err2) {
-        console.warn('[索引] 原子替换失败:', err2.message);
-        return;
-      }
-      try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
-    });
-  });
+  try {
+    saveIndex(JSON_PATH, articles);
+    indexCache = loadIndex(JSON_PATH);
+    rebuildIdMap(indexCache);
+    try { indexMtimeMs = fs.statSync(JSON_PATH).mtimeMs; } catch (_) {}
+  } catch (err) {
+    console.warn('[索引] 写入失败:', err.message);
+  }
 }
 
 // 刷新结果缓存：避免短时间内重复抓取同一详情页
@@ -235,30 +271,39 @@ function writeFavorites(list) {
   });
 }
 
+/** 同步写收藏（导入等需要立即落盘的场景） */
+function writeFavoritesSync(list) {
+  favCache = list;
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  fs.writeFileSync(FAV_PATH, JSON.stringify(list, null, 2), 'utf8');
+  try { favMtimeMs = fs.statSync(FAV_PATH).mtimeMs; } catch (_) { favMtimeMs = -1; }
+}
+
 function toVideoItem(a) {
-  const videos = Array.isArray(a.videos) && a.videos.length
-    ? a.videos
-    : (a.video ? [a.video] : []);
-  const blocks = sanitizeDetailBlocks(a.blocks);
-  let content = sanitizeDetailContent(a.content);
+  const full = articleStore.hydrateArticle(a);
+  const videos = Array.isArray(full.videos) && full.videos.length
+    ? full.videos
+    : (full.video ? [full.video] : []);
+  const blocks = sanitizeDetailBlocks(full.blocks);
+  let content = sanitizeDetailContent(full.content);
   if (!content && blocks.length) {
     content = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
   }
   return {
-    id: a.id,
-    title: a.title || '',
-    url: a.url,
-    siteUrl: a.siteUrl || null,
-    coverUrl: a.coverUrl || null,
-    video: videos[0] || a.video || null,
+    id: full.id,
+    title: full.title || '',
+    url: full.url,
+    siteUrl: full.siteUrl || null,
+    coverUrl: full.coverUrl || null,
+    video: videos[0] || full.video || null,
     videos,
-    tags: a.tags || [],
-    category: a.category || null,
-    datePublished: a.datePublished || null,
+    tags: full.tags || [],
+    category: full.category || null,
+    datePublished: full.datePublished || null,
     content,
-    images: Array.isArray(a.images) ? a.images : [],
+    images: Array.isArray(full.images) ? full.images : [],
     blocks,
-    favoritedAt: a.favoritedAt || null,
+    favoritedAt: full.favoritedAt || null,
   };
 }
 
@@ -405,7 +450,7 @@ function collectProxyAllowedHosts() {
     if (a.video && a.video.url) add(a.video.url);
     for (const v of a.videos || []) add(v && v.url);
     add(a.coverUrl);
-    for (const img of a.images || []) add(img);
+    // 详情配图走 /api/image，不经 HLS 代理白名单；此处不扫 details/
   }
   return hosts;
 }
@@ -516,6 +561,159 @@ app.get('/proxy/*', async (req, res) => {
 });
 
 // ---------- API 路由 ----------
+
+/**
+ * GET /api/access-info
+ * 返回扫码用局域网 URL。端口优先读 DATA_DIR/.server-port（与实际 listen 一致）。
+ * 响应：{ ok, port, lanIps: string[], urls: string[] }
+ */
+app.get('/api/access-info', (req, res) => {
+  let port = BASE_PORT;
+  try {
+    if (fs.existsSync(PORT_FILE)) {
+      const n = parseInt(fs.readFileSync(PORT_FILE, 'utf8').trim(), 10);
+      if (Number.isFinite(n) && n > 0) port = n;
+    }
+  } catch (_) { /* 回退 BASE_PORT */ }
+  const lanIps = getLocalIPv4();
+  const urls = lanIps.map((ip) => `http://${ip}:${port}`);
+  res.json({ ok: true, port, lanIps, urls });
+});
+
+// ---------- 数据目录 / 备份 / 缓存 / 播放进度 ----------
+
+const SITES_JSON_PATH = path.join(OUT_DIR, 'sites.json');
+const WATCH_PROGRESS_PATH = watchProgressStore.STORE_PATH;
+
+function dataPaths() {
+  return {
+    mediaCacheDir: MEDIA_CACHE_DIR,
+    indexPath: JSON_PATH,
+    favPath: FAV_PATH,
+    sitesPath: SITES_JSON_PATH,
+    watchPath: WATCH_PROGRESS_PATH,
+    fixedTagsPath: FIXED_TAGS_PATH,
+  };
+}
+
+/** 数据目录信息：路径、索引/收藏数量、缓存占用 */
+app.get('/api/data-info', (req, res) => {
+  try {
+    const info = dataManage.getDataInfo(dataPaths());
+    info.indexCount = getIndex().length;
+    info.favoritesCount = getFavorites().length;
+    info.sitesCount = getSiteConfigs().length;
+    info.syncLogRetainDays = syncLogger.getRetainDays();
+    info.syncLogArchiveDir = syncLogger.getArchiveDir();
+    info.syncLogArchives = syncLogger.listArchives(20);
+    res.json(info);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+/** 用系统资源管理器打开 DATA_DIR */
+app.post('/api/data/open-folder', async (req, res) => {
+  try {
+    const result = await dataManage.openDataDir();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+/** 整库导出（index + favorites + sites + watchProgress + fixedTags） */
+app.get('/api/data/export', (req, res) => {
+  try {
+    const fixedTags = dataManage.readJsonSafe(FIXED_TAGS_PATH, null);
+    const backup = dataManage.buildBackup({
+      index: getIndex().map((a) => articleStore.hydrateArticle(a)),
+      favorites: getFavorites(),
+      sites: getSiteConfigs(),
+      watchProgress: watchProgressStore.getAll(),
+      fixedTags,
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="studymaterials-backup-${stamp}.json"`);
+    res.send(JSON.stringify(backup));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+/**
+ * 整库导入。body 为备份 JSON。
+ * 会覆盖 index / favorites / sites / watchProgress（及可选 fixedTags）。
+ */
+app.post('/api/data/import', (req, res) => {
+  try {
+    const doc = req.body;
+    const err = dataManage.validateBackup(doc);
+    if (err) return res.status(400).json({ ok: false, error: err });
+
+    ensureDataDir();
+    saveIndex(JSON_PATH, doc.index);
+    writeFavoritesSync(doc.favorites);
+    saveSiteConfigs(doc.sites);
+    reloadSites();
+    watchProgressStore.replaceAll(doc.watchProgress || {});
+    if (doc.fixedTags != null) {
+      fs.writeFileSync(FIXED_TAGS_PATH, JSON.stringify(doc.fixedTags, null, 2), 'utf8');
+    }
+
+    onIndexChanged();
+    favCache = null;
+    favMtimeMs = -1;
+
+    res.json({
+      ok: true,
+      indexCount: doc.index.length,
+      favoritesCount: doc.favorites.length,
+      sitesCount: doc.sites.length,
+      watchCount: Object.keys(doc.watchProgress || {}).length,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+/** 清除 media-cache */
+app.post('/api/data/clear-cache', (req, res) => {
+  try {
+    const result = dataManage.clearMediaCache(MEDIA_CACHE_DIR);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+/** 全部播放进度 */
+app.get('/api/watch-progress', (req, res) => {
+  res.json({ ok: true, items: watchProgressStore.getAll() });
+});
+
+app.get('/api/watch-progress/:id', (req, res) => {
+  const item = watchProgressStore.getOne(req.params.id);
+  res.json({ ok: true, item });
+});
+
+app.put('/api/watch-progress/:id', (req, res) => {
+  const item = watchProgressStore.setOne(req.params.id, req.body || {});
+  res.json({ ok: true, item });
+});
+
+app.delete('/api/watch-progress/:id', (req, res) => {
+  watchProgressStore.removeOne(req.params.id);
+  res.json({ ok: true });
+});
+
+/** 批量合并进度（localStorage 迁移 / 导入） */
+app.post('/api/watch-progress/merge', (req, res) => {
+  const items = (req.body && req.body.items) || req.body || {};
+  const merged = watchProgressStore.mergeMany(items);
+  res.json({ ok: true, items: merged, count: Object.keys(merged).length });
+});
 
 // 站点配置（output/sites.json）
 app.get('/api/sites', (req, res) => {
@@ -750,7 +948,7 @@ app.get('/api/cover/:id', async (req, res) => {
 /** 详情配图代理（与封面相同解密逻辑） */
 app.get('/api/image/:id/:index', async (req, res) => {
   const found = findById(req.params.id);
-  const item = found && found.item;
+  const item = found && articleStore.hydrateArticle(found.item);
   const images = (item && Array.isArray(item.images)) ? item.images : [];
   const idx = Number(req.params.index);
   const imageUrl = images[idx];
@@ -1185,7 +1383,11 @@ function startBackgroundCrawl() {
   })();
 }
 
-/** 启动 HTTP 服务；可被 Electron 主进程复用。返回 { port, server } */
+/**
+ * 启动 HTTP 服务（幂等；可被 Electron 主进程复用）。
+ * @param {{ backgroundCrawl?: boolean, installSignalHandlers?: boolean }} [options]
+ * @returns {Promise<{ port: number, server: import('http').Server }>}
+ */
 async function startServer(options = {}) {
   const {
     backgroundCrawl = true,

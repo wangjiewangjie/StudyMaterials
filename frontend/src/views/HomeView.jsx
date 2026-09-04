@@ -158,7 +158,7 @@ export default function HomeView({
                   加载失败：{listError}
                 </Text>
               }
-              className="!py-20 rise-in home-empty"
+              className="!py-20 rise-in"
             >
               <Button
                 type="primary"
@@ -183,7 +183,7 @@ export default function HomeView({
                         : '资料库还是空的。点击右上角「同步」按钮抓取最新内容'}
                     </Text>
                   }
-                  className="!py-20 rise-in home-empty"
+                  className="!py-20 rise-in"
                 />
               ) : (
                 <>

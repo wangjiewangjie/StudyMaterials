@@ -1,6 +1,11 @@
+/**
+ * MobileNavDrawer — 移动端侧栏导航
+ * 首页 / 收藏 / 同步日志 / 扫码 / 立即同步；样式与暗色主题对齐。
+ */
+
 import { Button, Drawer } from 'antd';
 import {
-  HomeOutlined, StarOutlined, StarFilled, FileTextOutlined, SyncOutlined,
+  HomeOutlined, StarOutlined, StarFilled, FileTextOutlined, SyncOutlined, QrcodeOutlined,
 } from '@ant-design/icons';
 import { formatElapsedShort } from '../utils/format.js';
 
@@ -18,7 +23,6 @@ const BTN_ACTIVE = '!bg-[#FF9900]/10 !border-[#FF9900]/30 !text-[#FF9900]';
 const BTN_IDLE = '!bg-[#141416] !text-neutral-200 !border-white/10';
 const BTN_DISABLED = '!bg-white/5 !border-white/10 !text-neutral-500';
 
-/** 移动端侧栏：首页 / 收藏 / 同步日志 / 立即同步 */
 export default function MobileNavDrawer({
   open,
   isHomeView,
@@ -33,6 +37,7 @@ export default function MobileNavDrawer({
   onFavoritesClick,
   onSyncCenterClick,
   onSyncClick,
+  onLanQrClick,
 }) {
   return (
     <Drawer
@@ -88,6 +93,16 @@ export default function MobileNavDrawer({
           }`}
         >
           同步日志
+        </Button>
+
+        <Button
+          block
+          size="large"
+          onClick={onLanQrClick}
+          icon={<QrcodeOutlined />}
+          className={`!inline-flex !items-center !justify-start !font-bold !border ${BTN_IDLE}`}
+        >
+          扫码用手机打开
         </Button>
 
         <Button

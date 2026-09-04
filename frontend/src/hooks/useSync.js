@@ -1,3 +1,10 @@
+/**
+ * hooks/useSync.js — 全量同步 / 关键词同步状态机
+ *
+ * 维护进度、日志、历史、取消（AbortController）与 SSE 批次刷新。
+ * onSyncDone：整次同步结束回调；onBatch：SSE 批次时静默刷新列表。
+ */
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { syncCrawl, syncKeywords } from '../services/api.js';
 import { formatElapsedShort } from '../utils/format.js';
@@ -26,8 +33,9 @@ function uniqueKeywordsFromInput(keywordsInput) {
 }
 
 /**
- * 同步状态：进度、日志、历史与取消。
- * onSyncDone：结束回调；onBatch：SSE 批次时静默刷新列表。
+ * @param {*} message antd message
+ * @param {() => void} [onSyncDone]
+ * @param {() => void} [onBatch]
  */
 export function useSync(message, onSyncDone, onBatch) {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -104,7 +112,10 @@ export function useSync(message, onSyncDone, onBatch) {
   }, [isSyncing, isKeywordSyncing]);
 
   useEffect(() => {
-    if (!isSyncing) return undefined;
+    const busy = isSyncing || isKeywordSyncing;
+    // 供 Electron 主进程 close/quit 时 executeJavaScript 读取
+    try { window.__STUDY_SYNC_BUSY__ = busy; } catch { /* ignore */ }
+    if (!busy) return undefined;
     const onBeforeUnload = (e) => {
       e.preventDefault();
       e.returnValue = '同步尚未完成，离开页面会中断任务。确定要离开吗？';
@@ -112,7 +123,7 @@ export function useSync(message, onSyncDone, onBatch) {
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isSyncing]);
+  }, [isSyncing, isKeywordSyncing]);
 
   const reset = useCallback(() => {
     setIsSyncing(false);

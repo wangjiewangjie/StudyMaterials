@@ -1,8 +1,15 @@
-// crawler.js — 多站点聚合爬虫。站点配置读自 output/sites.json（页面可改，即时生效）。
-//
-// 命令行：
-//   node crawler.js --pages 1-3
-//   node crawler.js --search <关键词> --search-pages 2
+/**
+ * crawler.js — 多站点聚合爬虫（可被 server 复用，也可 CLI 独立运行）
+ *
+ * 数据：站点配置 DATA_DIR/sites.json（页面可改，即时生效）；索引同目录 index.json。
+ * 能力：列表/关键词抓取、详情解析、永久地址 failover（依赖 puppeteer-core + 系统 Chrome/Edge）。
+ *
+ * CLI：
+ *   node crawler.js --pages 1-3
+ *   node crawler.js --search <关键词> --search-pages 2
+ *
+ * 导出面见文末 module.exports（供 server.js 调用，勿随意改名）。
+ */
 
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +23,7 @@ const { isPromoDetailText } = require('./lib/detail-noise');
 const { writeFailureReport, setFailureLogPath } = require('./lib/crawl-failure-log');
 const permanentResolver = require('./lib/permanent-resolve');
 const { DATA_DIR } = require('./lib/paths');
+const articleStore = require('./lib/article-store');
 
 // 站点项：{ url, name, todayPath, enabled, archiveSuffix?, permanentUrl?, permanentLabel?, lines? }
 //   permanentUrl   可选：站点「永久地址/发布页」。当前 url 失效时，渲染永久页取「线路一」
@@ -993,9 +1001,21 @@ function loadIndex(jsonPath) {
     if (_indexCache && _indexCachePath === jsonPath && mtime === _indexCacheMtime) {
       return _indexCache;
     }
-    _indexCache = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    let articles = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    if (!Array.isArray(articles)) articles = [];
+    // 旧版胖索引：一次性拆到 details/ 并回写瘦身 index
+    const { articles: light, changed, migrated } = articleStore.migrateFatIndex(articles);
+    if (changed) {
+      fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+      const tmp = `${jsonPath}.${process.pid}.mig.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(light), 'utf8');
+      fs.renameSync(tmp, jsonPath);
+      console.log(`  [索引] 已冷热分离 ${migrated} 条详情 → details/`);
+      articles = light;
+    }
+    _indexCache = articles;
     _indexCachePath = jsonPath;
-    _indexCacheMtime = mtime;
+    try { _indexCacheMtime = fs.statSync(jsonPath).mtimeMs; } catch (_) { _indexCacheMtime = mtime; }
     return _indexCache;
   } catch (_) {
     if (_indexCache && _indexCachePath === jsonPath) return _indexCache;
@@ -1005,11 +1025,13 @@ function loadIndex(jsonPath) {
 
 function saveIndex(jsonPath, articles) {
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
-  _indexCache = articles;
+  const list = Array.isArray(articles) ? articles : [];
+  // 写入前拆详情，保证 index.json 始终轻量
+  const { articles: light } = articleStore.stripArticlesForIndex(list);
+  _indexCache = light;
   _indexCachePath = jsonPath;
-  // 紧凑 JSON：体积更小、写入更快；原子写避免半截文件
   const tmp = `${jsonPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(articles), 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(light), 'utf8');
   fs.renameSync(tmp, jsonPath);
   try { _indexCacheMtime = fs.statSync(jsonPath).mtimeMs; } catch (_) { _indexCacheMtime = Date.now(); }
 }
@@ -1585,10 +1607,11 @@ if (require.main === module) {
   });
 }
 
+// 对外导出：同步管线（crawl）+ 详情/播放解析 + 站点配置读写 + 永久页 failover + 失败日志
 module.exports = {
   crawl, parseDetailPage, resolvePlayerUrl, loadIndex, saveIndex,
   UA, normalizeSiteUrl,
   getSiteConfigs, getSites, getBaseUrl,
   setFailureLogPath, flushFailureReport, formatRequestError,
-  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig, remapIndexSiteUrls,
+  saveSiteConfigs, reloadSites, autoFailover, findSiteConfig,
 };

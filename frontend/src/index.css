@@ -56,6 +56,7 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
+  max-width: 100vw;
 }
 #root { min-height: 100vh; }
 
@@ -290,6 +291,12 @@ html, body {
     transition: none !important;
     transform: none !important;
   }
+
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
 }
 
 /* ===== Skeleton 骨架屏 ===== */
@@ -402,24 +409,6 @@ html, body {
   padding-inline-start: 36px !important;
 }
 
-/* 方形图标按钮：宽高 = 对应 size 高度 */
-.app-btn-icon.ant-btn {
-  width: var(--ctrl-md);
-  min-width: var(--ctrl-md) !important;
-  height: var(--ctrl-md);
-  padding-inline: 0 !important;
-}
-.app-btn-icon.ant-btn-sm {
-  width: var(--ctrl-sm);
-  min-width: var(--ctrl-sm) !important;
-  height: var(--ctrl-sm);
-}
-.app-btn-icon.ant-btn-lg {
-  width: var(--ctrl-lg);
-  min-width: var(--ctrl-lg) !important;
-  height: var(--ctrl-lg);
-}
-
 /* 按钮 */
 .ant-btn {
   border-radius: var(--r-md);
@@ -501,11 +490,6 @@ html, body {
   border-radius: var(--r-sm) !important;
 }
 
-/* ===== H5 右侧溢出修复：锁定根容器横向不滚动 ===== */
-html, body {
-  overflow-x: hidden;
-  max-width: 100vw;
-}
 .app-shell {
   overflow-x: hidden;
   max-width: 100vw;
@@ -826,15 +810,6 @@ html, body {
   box-shadow: 0 14px 32px rgba(255, 153, 0, .25);
 }
 .back-top:active { transform: translateY(0); }
-
-/* ===== 减少动效偏好 ===== */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: .01ms !important;
-  }
-}
 
 /* ============================================================
  * 移动端深度适配

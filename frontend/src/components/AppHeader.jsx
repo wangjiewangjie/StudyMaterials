@@ -1,6 +1,11 @@
+/**
+ * AppHeader — 顶栏：品牌、搜索、扫码、收藏、同步日志、同步
+ * 窄屏改为扫码图标 + 汉堡菜单（具体项见 MobileNavDrawer）。
+ */
+
 import { Input, Button } from 'antd';
 import {
-  SearchOutlined, StarOutlined, StarFilled, FileTextOutlined, MenuOutlined,
+  SearchOutlined, StarOutlined, StarFilled, FileTextOutlined, MenuOutlined, QrcodeOutlined,
 } from '@ant-design/icons';
 import { navBtnClass } from '../constants/layout.js';
 import { formatElapsedShort } from '../utils/format.js';
@@ -16,6 +21,7 @@ export default function AppHeader({
   onSyncCenterClick,
   onSyncClick,
   onHomeClick,
+  onLanQrClick,
   isSyncing,
   isBusy = false,
   elapsed = 0,
@@ -62,26 +68,47 @@ export default function AppHeader({
           <Button
             type="primary"
             size="middle"
-            icon={<SearchOutlined />}
             onClick={onSearch}
             aria-label="搜索"
             className="!bg-ph-orange hover:!bg-ph-orange-light !text-black !border-0 !font-bold shrink-0"
           >
-            <span className="hidden sm:inline">搜索</span>
+            搜索
           </Button>
         </div>
 
         {isMobile ? (
-          <Button
-            type="text"
-            size="middle"
-            onClick={onOpenDrawer}
-            icon={<MenuOutlined style={{ fontSize: 18 }} />}
-            className="!text-ph-orange hover:!bg-ph-orange/10 shrink-0 !border-0 !bg-transparent"
-            aria-label="打开菜单"
-          />
+          <div className="flex items-center gap-0.5 shrink-0">
+            <Button
+              type="text"
+              size="middle"
+              onClick={onLanQrClick}
+              icon={<QrcodeOutlined style={{ fontSize: 18 }} />}
+              className="!text-ph-orange hover:!bg-ph-orange/10 !border-0 !bg-transparent"
+              aria-label="扫码用手机打开"
+              title="扫码用手机打开"
+            />
+            <Button
+              type="text"
+              size="middle"
+              onClick={onOpenDrawer}
+              icon={<MenuOutlined style={{ fontSize: 18 }} />}
+              className="!text-ph-orange hover:!bg-ph-orange/10 !border-0 !bg-transparent"
+              aria-label="打开菜单"
+            />
+          </div>
         ) : (
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <Button
+              type="text"
+              size="middle"
+              onClick={onLanQrClick}
+              icon={<QrcodeOutlined style={{ fontSize: 13 }} />}
+              className={navBtnClass(false)}
+              title="扫码用手机打开"
+            >
+              <span className="hidden sm:inline">扫码</span>
+            </Button>
+
             <Button
               type="text"
               size="middle"

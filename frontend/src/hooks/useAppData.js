@@ -1,3 +1,10 @@
+/**
+ * hooks/useAppData.js — 视频 / 收藏 / 站点 / 标签数据面
+ *
+ * 负责首屏并行加载、列表静默刷新、收藏乐观互斥（pendingFavIds）。
+ * 同步进度与日志见 useSync。
+ */
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   fetchVideos,
@@ -14,7 +21,10 @@ function isAbortError(error) {
   return error?.name === 'AbortError';
 }
 
-/** 视频 / 收藏 / 站点 / 标签数据 */
+/**
+ * @param {(msg: string) => void} [message] antd message 适配（经 ref 避免依赖抖动）
+ * @returns 数据状态与 loadVideos / toggleFavorite / clearAllFavorites
+ */
 export function useAppData(message) {
   const messageRef = useRef(message);
   messageRef.current = message;
@@ -173,6 +183,8 @@ export function useAppData(message) {
     listVersion,
     isBootstrapped,
     loadVideos,
+    loadFavorites,
+    loadSites,
     toggleFavorite,
     clearAllFavorites,
   };

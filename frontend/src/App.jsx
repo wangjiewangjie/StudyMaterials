@@ -1,3 +1,10 @@
+/**
+ * App.jsx — 前端根编排
+ *
+ * 路由视图：首页 / 详情 / 收藏 / 同步中心；顶栏 + 抽屉 + 同步弹窗 + 扫码弹窗。
+ * 数据面 useAppData，同步面 useSync；视图组件 lazy 加载以控制首屏体积。
+ */
+
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { App as AntdApp, Spin, Button, Empty } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -8,6 +15,7 @@ import BackTop from './components/BackTop.jsx';
 import { useAppData } from './hooks/useAppData.js';
 import { useSync } from './hooks/useSync.js';
 import { downloadFavorites } from './services/api.js';
+import { hydrateWatchProgress } from './utils/watch-progress.js';
 import { SYNC_MODAL_AUTO_CLOSE_MS, DETAIL_NOT_FOUND_MS, SYNC_BATCH_REFRESH_MS } from './constants/timing.js';
 
 const HomeView = lazy(() => import('./views/HomeView.jsx'));
@@ -15,6 +23,7 @@ const DetailView = lazy(() => import('./views/DetailView.jsx'));
 const FavoritesView = lazy(() => import('./views/FavoritesView.jsx'));
 const SyncCenterView = lazy(() => import('./views/SyncCenterView.jsx'));
 const SyncModal = lazy(() => import('./components/SyncModal.jsx'));
+const LanQrModal = lazy(() => import('./components/LanQrModal.jsx'));
 
 const VIEW = {
   HOME: 'home',
@@ -54,6 +63,7 @@ export default function App() {
   const [favQuery, setFavQuery] = useState('');
   const [activeTag, setActiveTag] = useState('');
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isLanQrOpen, setIsLanQrOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isDetailMissing, setIsDetailMissing] = useState(false);
   const [isMobile, setIsMobile] = useState(
@@ -85,9 +95,24 @@ export default function App() {
     listVersion,
     isBootstrapped,
     loadVideos,
+    loadFavorites,
+    loadSites,
     toggleFavorite,
     clearAllFavorites,
   } = useAppData(message);
+
+  useEffect(() => {
+    hydrateWatchProgress();
+  }, []);
+
+  const handleDataImported = useCallback(async () => {
+    await Promise.all([
+      loadVideos(query.trim()),
+      loadFavorites(),
+      loadSites(),
+      hydrateWatchProgress({ force: true }),
+    ]);
+  }, [loadVideos, loadFavorites, loadSites, query]);
 
   itemsRef.current = items;
   favoritesRef.current = favorites;
@@ -315,6 +340,7 @@ export default function App() {
           elapsed={elapsed}
           isMobile={isMobile}
           onOpenDrawer={() => setIsDrawerOpen(true)}
+          onLanQrClick={() => setIsLanQrOpen(true)}
         />
 
         <Suspense
@@ -411,6 +437,7 @@ export default function App() {
               keywordResults={keywordResults}
               onStartKeywordSync={startKeywordSync}
               onCancelKeywordSync={cancelKeywordSync}
+              onDataImported={handleDataImported}
             />
           )}
         </Suspense>
@@ -430,6 +457,12 @@ export default function App() {
           </Suspense>
         )}
 
+        {isLanQrOpen && (
+          <Suspense fallback={null}>
+            <LanQrModal open={isLanQrOpen} onClose={() => setIsLanQrOpen(false)} />
+          </Suspense>
+        )}
+
         <MobileNavDrawer
           open={isDrawerOpen && isMobile}
           isHomeView={isHomeView}
@@ -444,6 +477,10 @@ export default function App() {
           onFavoritesClick={handleFavoritesClick}
           onSyncCenterClick={handleSyncCenterClick}
           onSyncClick={handleStartSync}
+          onLanQrClick={() => {
+            setIsDrawerOpen(false);
+            setIsLanQrOpen(true);
+          }}
         />
 
         <BackTop />

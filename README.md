@@ -1,200 +1,219 @@
-# 学习资料
+# 学习资料（StudyMaterials）
 
-本地视频资料库：自动从多个源站抓取内容，在浏览器里搜索、播放、收藏。数据都存在你自己的电脑上。
+本地视频资料库：多源站抓取、本机存储、网页 / Electron 桌面浏览与播放。数据只保存在你自己的电脑上，不依赖云端账号。
 
-## 能做什么
+## 功能一览
 
-- 打开网页浏览已抓取的视频，点标签或搜索筛选
-- 在线播放（支持加密 m3u8），自动续播进度
-- 一键同步最新内容；也可用关键词按需搜索同步
-- 收藏喜欢的条目（同步不会清空收藏）
-- 在页面里增删、启用/禁用源站，无需改代码
+- 浏览已抓取内容：标签筛选、本地搜索、详情页播放（含加密 m3u8）
+- 一键同步最新列表；支持关键词按需抓取
+- 收藏（同步不会清空）、源站增删与启用/禁用（页面可改）
+- 桌面端顶栏 **扫码**：同一 Wi‑Fi 下手机直接打开局域网地址
 
 ---
 
-# 第一次使用（开发者 / 命令行）
+## 架构
 
-下面以 **Windows** 为主说明。若只想给别人用、自己不想装 Node，请看文末「打包成桌面应用」。
+```text
+┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
+│ Electron 壳 │────▶│ Express server.js│────▶│ crawler.js  │
+│ 或 npm start│     │ API / 静态 / 代理 │     │ 多站抓取    │
+└─────────────┘     └────────┬─────────┘     └─────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+         React 前端     DATA_DIR 数据    手机扫码访问
+       (public/build)   (index/收藏/站)   (同一局域网)
+```
 
-Mac / Linux 命令类似，差异会单独标出。
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| 服务 | `server.js` | 静态页、REST、HLS/图片代理、触发同步；监听 `0.0.0.0` |
+| 爬虫 | `crawler.js` | 列表/关键词抓取、详情解析；永久页 failover 依赖本机 Chrome/Edge |
+| 路径 | `lib/paths.js` | `APP_ROOT`（只读）与 `DATA_DIR`（可写） |
+| 桌面 | `electron/main.js` | 单实例、注入路径、启停服务、加载本机窗口 |
+| 前端 | `frontend/` | React + Ant Design；构建产物在 `public/build/` |
 
-### 第 1 步：安装 Node.js
+**数据目录**
 
-本软件需要 Node.js 才能运行（推荐 **18 或更高**，最低 16）。
+| 运行方式 | `DATA_DIR` |
+|----------|------------|
+| `npm start` / 开发 | 项目下 `output/` |
+| Electron 安装包 | `%APPDATA%\学习资料\output\`（卸载不会自动删数据） |
 
-1. 打开官网：https://nodejs.org/
-2. 下载 **LTS（长期支持版）** 安装包并双击安装
-3. 安装时一路「下一步」即可（保持默认勾选「Add to PATH」）
-4. 装好后验证：按 `Win + R`，输入 `cmd` 回车，在黑色窗口里输入：
+---
+
+## 环境要求
+
+- **Node.js** 18+（最低 16）
+- Windows 为主；Mac / Linux 命令类似
+- 永久地址自动切换需要本机已安装 **Chrome 或 Edge**
+
+验证：
 
 ```bash
 node -v
 npm -v
 ```
 
-若分别显示出类似 `v18.x.x` 和 `10.x.x` 的版本号，说明安装成功。
+---
 
-> 若提示「不是内部或外部命令」，说明 Node 没装好或没进 PATH，请重新安装 Node.js 并重启电脑后再试。
+## 快速开始（命令行）
 
-### 第 2 步：拿到本项目文件夹
-
-任选一种方式：
-
-**方式 A：用 Git 克隆（推荐）**
+### 1. 获取代码
 
 ```bash
 git clone https://github.com/wangjiewangjie/StudyMaterials.git
 cd StudyMaterials
 ```
 
-**方式 B：下载压缩包**
+或下载 ZIP 解压后进入项目根目录（能看到 `package.json`、`server.js`）。
 
-1. 在代码托管网站下载 ZIP
-2. 解压到任意目录，例如 `D:\StudyMaterials`
-3. 打开该文件夹
-
-### 第 3 步：打开命令行并进入项目目录
-
-1. 在项目文件夹空白处，按住 `Shift` 再右键
-2. 选择「在此处打开 PowerShell 窗口」或「打开终端」
-3. 确认当前路径就是项目根目录（能看到 `package.json`、`server.js`）
-
-也可手动进入：
-
-```bash
-cd D:\StudyMaterials
-```
-
-（请改成你自己的实际路径。）
-
-### 第 4 步：安装依赖
-
-在项目根目录执行：
+### 2. 安装依赖
 
 ```bash
 npm install
 ```
 
-这一步会：
-
-1. 安装后端依赖  
-2. **自动**再安装前端依赖（不必手动进入 `frontend` 文件夹）
-
-第一次可能要几分钟，请耐心等待。看到命令重新出现、没有红色报错，即表示成功。
-
-若前端依赖自动安装失败，可手动执行：
+会安装后端依赖，并自动安装 `frontend/` 依赖。若前端失败：
 
 ```bash
-cd frontend
-npm install
-cd ..
+cd frontend && npm install && cd ..
 ```
 
-### 第 5 步：启动服务
-
-仍在项目根目录执行：
+### 3. 启动
 
 ```bash
 npm start
 ```
 
-成功后终端会出现类似信息：
+终端会打印本机与局域网地址，例如：
 
+```text
+学习资料已启动
+本机  http://localhost:9999
+局域网  http://192.168.x.x:9999
 ```
-学习资料 - 服务器已启动: http://localhost:9999
-已加载 N 条记录
-```
 
-启动后会在后台自动抓取内容，稍等片刻再刷新页面即可看到资料。
-
-### 第 6 步：打开网页
-
-1. 打开浏览器（Chrome / Edge 均可）
-2. 地址栏输入：http://localhost:9999
-3. 回车进入
-
-同一局域网内的手机/其他电脑，可用终端里打印的局域网地址访问（例如 `http://192.168.x.x:9999`）。
-
-### 第 7 步：停止服务
-
-在运行 `npm start` 的那个窗口里按 `Ctrl + C`，即可停止。下次使用重复「第 5、6 步」即可。
-
----
-
-## 日常怎么用
-
-| 你想做的事 | 操作 |
-|------------|------|
-| 看视频 | 首页点卡片进入详情，点播放 |
-| 按标签筛选 | 点顶部标签栏 |
-| 搜索本地已有内容 | 顶部搜索框输入标题关键词 |
-| 同步最新 | 点右上角「同步」 |
-| 按关键词抓取 | 进入「同步中心」，输入关键词同步 |
-| 收藏 | 卡片或详情页点星标 |
-| 管理源站 | 同步中心里编辑站点（改地址、启用/禁用） |
-
-### 换一个端口启动
-
-默认是 `9999`。若被占用，程序会自动换端口；也可手动指定：
+浏览器打开本机地址即可。默认端口 `9999`，占用时自动递增；也可：
 
 ```bash
-# Windows PowerShell
+# PowerShell
 $env:PORT=8080; npm start
-
-# Windows CMD
-set PORT=8080 && npm start
-
-# macOS / Linux
-PORT=8080 npm start
 ```
 
-然后浏览器打开对应端口，例如 http://localhost:8080 。
+停止：在运行窗口按 `Ctrl + C`。
 
 ---
 
-## 改了前端代码之后
+## 桌面端（Electron）
 
-仓库里已带好构建结果，普通使用**不用**再构建。
+无需对外暴露「用户装 Node」时，开发者可打包 Windows 安装包 / 绿色版。
 
-只有你修改了 `frontend/` 里的界面代码时，才需要：
+本地先验证窗口：
+
+```bash
+npm run build
+npm run electron
+```
+
+正式打包（国内建议先设镜像）：
+
+```bash
+set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
+npm install
+npm run dist
+```
+
+产物在 `dist-electron/`：
+
+| 文件 | 说明 |
+|------|------|
+| `学习资料 Setup x.x.x.exe` | 安装版（开始菜单 + 桌面快捷方式） |
+| `学习资料 x.x.x.exe` | 绿色便携版 |
+
+打包前会跑 `npm run icons`（由 `frontend/public/logo.svg` 生成图标）。若出现 winCodeSign / 符号链接权限错误：打开 Windows「开发人员模式」，或保持 `package.json` 中 `build.win.signAndEditExecutable` 为 `false`。
+
+---
+
+## 手机扫码访问
+
+桌面端或 `npm start` 运行后，服务监听局域网。
+
+1. 电脑与手机连 **同一 Wi‑Fi**
+2. 顶栏点 **扫码**（手机侧栏也有入口）
+3. 用系统相机或浏览器扫二维码打开
+
+也可手动在手机浏览器输入终端打印的 `http://192.168.x.x:端口`。
+
+打不开时优先检查：
+
+- 是否同一局域网（访客网络 / AP 隔离会导致失败）
+- Windows 防火墙是否放行 Node /「学习资料」入站
+- 多网卡时在扫码弹窗里切换地址（优先展示 `192.168.*`）
+
+关闭 Electron / 停止 `npm start` 后，手机将无法继续访问。
+
+---
+
+## 日常使用
+
+| 需求 | 操作 |
+|------|------|
+| 播放 | 首页点卡片 → 详情播放 |
+| 标签筛选 | 顶部标签栏 |
+| 本地搜索 | 顶栏搜索框 |
+| 同步最新 | 顶栏「同步」 |
+| 关键词抓取 | 「同步中心 / 日志」 |
+| 收藏 | 卡片或详情星标 |
+| 管理源站 | 同步中心编辑站点 |
+| 手机打开 | 顶栏「扫码」 |
+| 数据目录 / 备份 / 清缓存 | 同步中心底部「数据与备份」 |
+| 关窗到托盘 | 点关闭隐藏到托盘，同步可继续；托盘右键「退出」才停服 |
+
+### 播放快捷键
+
+| 操作 | 方式 |
+|------|------|
+| 播放 / 暂停 | 点击画面，或 `空格` / `K` |
+| 快退 / 快进 5 秒 | `←` / `→` |
+| 音量 | `↑` / `↓` |
+| 静音 | `M` |
+| 全屏 | `F` 或双击画面 |
+| 续播 | 自动记进度，播完清除 |
+
+---
+
+## 开发
+
+仓库已带 `public/build`；仅改 `frontend/` 时需要重新构建：
 
 ```bash
 npm run build
 ```
 
-然后再 `npm start`。
-
-### 开发时热更新（可选）
-
-需要开两个终端窗口：
+热更新（两个终端）：
 
 ```bash
-# 窗口 1：后端
+# 终端 1
 npm start
 
-# 窗口 2：前端开发服务
+# 终端 2
 npm run dev
 ```
 
-浏览器打开 http://localhost:5173 （已自动把接口代理到后端）。
+浏览器打开 http://localhost:5173 （已代理 API 到后端）。
 
 ---
 
-## 命令行爬取（可选）
+## 命令行爬取
 
-不打开网页也能抓取：
+不打开网页也可抓取：
 
 ```bash
-# 抓列表第 1 页
 npm run crawl -- --pages 1
-
-# 抓第 1～5 页
 npm run crawl -- --pages 1-5
-
-# 按关键词搜索抓取
 npm run crawl -- --search 关键词 --search-pages 2
-
-# 限制最多处理 20 条
 npm run crawl -- --pages 1-5 --limit 20
 ```
 
@@ -208,90 +227,62 @@ npm run crawl -- --pages 1-5 --limit 20
 
 ---
 
-## 站点配置说明
+## 站点与数据文件
 
-站点保存在 `output/sites.json`，也可在页面「同步中心」里修改，保存后下次抓取立即生效。
+站点保存在 `DATA_DIR/sites.json`，也可在页面「同步中心」修改，保存后下次抓取立即生效。
 
 | 字段 | 含义 |
 |------|------|
 | `url` | 站点根地址（必填） |
 | `name` | 显示名称 |
-| `todayPath` | 「今日」分类路径；为空则直接抓列表第 1 页 |
-| `archiveSuffix` | 详情页后缀：`/` 或 `.html` |
+| `todayPath` | 「今日」分类路径；空则抓列表第 1 页 |
+| `archiveSuffix` | 详情后缀：`/` 或 `.html` |
 | `enabled` | 是否参与抓取 |
-
-源站域名常会更换：只需把失效站点的 `url` 改成新地址即可，一般不必改代码。
-
----
-
-## 播放快捷键
-
-| 操作 | 方式 |
-|------|------|
-| 播放 / 暂停 | 点击画面，或 `空格` / `K` |
-| 快退 / 快进 5 秒 | `←` / `→` |
-| 音量 | `↑` / `↓` |
-| 静音 | `M` |
-| 全屏 | `F`，或双击画面 |
-| 续播 | 自动记住进度，播完清除 |
-
----
-
-## 数据存在哪
-
-**命令行方式（`npm start`）**：项目下的 `output/` 目录。
-
-**桌面安装包**：用户数据目录（Windows 一般在 `%APPDATA%\学习资料\output\`），卸载应用不会自动删除这些数据。
+| `permanentUrl` | 可选；域名失效时用永久页解析新线路 |
 
 | 文件 | 内容 |
 |------|------|
-| `index.json` | 已抓取的视频索引 |
-| `favorites.json` | 收藏（同步不会清空） |
+| `index.json` | 视频列表索引（轻量，不含正文/图集） |
+| `details/` | 详情分文件（`content` / `images` / `blocks`，按 id） |
+| `favorites.json` | 收藏 |
 | `sites.json` | 站点配置 |
-| `fixed-tags.json` | 固定标签（关联视频很多时自动写入） |
+| `watch-progress.json` | 播放进度（桌面/网页共用，落在数据目录） |
+| `fixed-tags.json` | 高频固定标签 |
+| `.server-port` | 当前实际监听端口 |
+| `sync-log.json` | 当前会话同步日志 |
+| `sync-logs/` | 历史会话归档（默认保留 7 天） |
+| `media-cache/` | 封面/图集缓存（可在同步中心清除） |
 
 ---
 
-## 打包成桌面应用（免安装 Node）
-
-开发者在本机装好 Node 后，可打出 Windows 安装包 / 绿色版，发给没有 Node 的用户：
-
-```bash
-# 国内网络建议先设镜像，再打包
-set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
-set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
-npm install
-npm run dist
-```
-
-产物在 `dist-electron/`：
-
-| 文件 | 说明 |
-|------|------|
-| `学习资料 Setup x.x.x.exe` | 安装向导（开始菜单 + 桌面快捷方式） |
-| `学习资料 x.x.x.exe` | 绿色便携版，双击即可 |
-
-本地先验证桌面窗口（不打包）：
-
-```bash
-npm run build
-npm run electron
-```
-
-> 永久地址自动切换仍依赖系统已安装的 Chrome 或 Edge（与网页版相同）。  
-> 打包前会执行 `npm run icons`，用 `frontend/public/logo.svg` 生成桌面图标（需本机有 Chrome/Edge）。  
-> 若打包时报 winCodeSign / 符号链接权限错误：打开 Windows「开发人员模式」，或保持 `package.json` 里 `build.win.signAndEditExecutable` 为 `false`（当前默认）。
-
----
-
-## 常用命令
+## 命令速查
 
 | 命令 | 作用 |
 |------|------|
 | `npm install` | 安装依赖（含前端） |
-| `npm start` | 启动服务，浏览器打开提示的地址 |
-| `npm run electron` | 以桌面窗口启动（需已 build 前端） |
+| `npm start` | 启动服务 |
+| `npm run electron` | 桌面窗口（需已 build 前端） |
 | `npm run dist` | 打包 Windows 安装包 + 绿色版 |
-| `npm run build` | 重新打包前端 |
-| `npm run dev` | 前端开发热更新 |
+| `npm run build` | 构建前端到 `public/build` |
+| `npm run dev` | 前端热更新 |
 | `npm run crawl -- …` | 命令行爬取 |
+| `npm run icons` | 从 logo 生成桌面图标 |
+
+---
+
+## 常见问题
+
+**端口被占用**  
+程序会自动换端口；或用环境变量 `PORT` 指定。实际端口见终端输出或 `DATA_DIR/.server-port`。
+
+**手机扫码打不开**  
+确认同 Wi‑Fi、防火墙放行、扫码弹窗选对网卡 IP；关掉桌面端后服务即停。
+
+**永久地址切换失败**  
+需本机 Chrome/Edge；也可设 `PUPPETEER_EXECUTABLE_PATH` 指向浏览器可执行文件。
+
+**前端改了没变化**  
+执行 `npm run build` 后再 `npm start` / 重新打开 Electron。
+
+**打包报符号链接 / 签名相关错误**  
+开启 Windows 开发人员模式，或保持不签名配置（见上文打包说明）。

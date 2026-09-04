@@ -11,7 +11,7 @@
     "build": "npm --prefix frontend run build",
     "dev": "npm --prefix frontend run dev",
     "icons": "node scripts/apply-logo-ico.js",
-    "electron": "electron .",
+    "electron": "node scripts/run-electron.js",
     "dist": "npm run build && npm run icons && electron-builder --win",
     "dist:dir": "npm run build && npm run icons && electron-builder --win --dir",
     "postinstall": "node scripts/install-frontend.js"
@@ -27,7 +27,6 @@
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^3.0.2",
-    "rcedit": "^5.0.1",
     "resedit": "^1.7.2",
     "sharp": "^0.35.4"
   },
@@ -54,7 +53,6 @@
     ],
     "asar": true,
     "afterExtract": "./scripts/after-extract.js",
-    "afterPack": "./scripts/after-pack.js",
     "win": {
       "icon": "build/app-icon.ico",
       "executableName": "StudyMaterials",

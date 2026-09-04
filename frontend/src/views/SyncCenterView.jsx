@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import PageShell from '../components/PageShell.jsx';
 import PageBanner from '../components/PageBanner.jsx';
+import DataManagePanel from '../components/DataManagePanel.jsx';
 import { formatDate, formatElapsedShort } from '../utils/format.js';
 import {
   STAT_GUTTER, STAT_RESPONSIVE, SRC_GUTTER, SRC_RESPONSIVE,
@@ -102,6 +103,7 @@ export default function SyncCenterView({
   keywordResults,
   onStartKeywordSync,
   onCancelKeywordSync,
+  onDataImported,
 }) {
   const [keywords, setKeywords] = useState('');
 
@@ -374,6 +376,8 @@ export default function SyncCenterView({
           )}
         </div>
       </section>
+
+      <DataManagePanel onImported={onDataImported} />
     </PageShell>
   );
 }
