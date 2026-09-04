@@ -321,8 +321,23 @@ export default function App() {
     };
   }, [view, route.id, detailItem, isBootstrapped, findItemById]);
 
+  // 视图切换时更新标签页标题
+  useEffect(() => {
+    const titles = {
+      [VIEW.HOME]: '学习资料',
+      [VIEW.FAVORITES]: '我的收藏 · 学习资料',
+      [VIEW.SYNC_CENTER]: '同步日志 · 学习资料',
+    };
+    if (view === VIEW.DETAIL) {
+      document.title = detailItem?.title ? `${detailItem.title} · 学习资料` : '详情 · 学习资料';
+    } else {
+      document.title = titles[view] || '学习资料';
+    }
+  }, [view, detailItem]);
+
   return (
     <ErrorBoundary>
+      <a href="#main-content" className="skip-link">跳到主要内容</a>
       <div className="app-shell min-h-screen pt-16">
         <AppHeader
           query={query}

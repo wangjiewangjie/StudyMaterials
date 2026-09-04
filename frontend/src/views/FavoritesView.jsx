@@ -110,11 +110,16 @@ export default function FavoritesView({
 
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         <div className="flex-1 relative">
-          <SearchOutlined className="absolute left-3 top-1/2 -translate-y-1/2 text-ph-text-muted z-10" style={{ fontSize: 14 }} />
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-ph-text-muted z-10" aria-hidden="true">
+            <SearchOutlined style={{ fontSize: 14 }} />
+          </span>
           <Input
             allowClear
             size="middle"
-            placeholder="在收藏库中搜索..."
+            type="search"
+            aria-label="搜索收藏"
+            autoComplete="off"
+            placeholder="在收藏库中搜索，如：教程…"
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             className="app-input-search !bg-ph-panel !border-white/10 !text-white"

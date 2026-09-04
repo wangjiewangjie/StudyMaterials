@@ -85,12 +85,18 @@ function getLocalIPv4() {
   return ips;
 }
 
-function findAvailablePort(startPort) {
-  return new Promise((resolve) => {
+const PORT_ATTEMPT_LIMIT = 100;
+
+function findAvailablePort(startPort, attemptsLeft = PORT_ATTEMPT_LIMIT) {
+  return new Promise((resolve, reject) => {
+    if (attemptsLeft <= 0) {
+      reject(new Error(`端口探测失败：连续 ${PORT_ATTEMPT_LIMIT} 个端口均被占用，请检查后重试`));
+      return;
+    }
     const server = net.createServer();
     server.unref();
     server.on('error', () => {
-      resolve(findAvailablePort(startPort + 1));
+      findAvailablePort(startPort + 1, attemptsLeft - 1).then(resolve, reject);
     });
     server.listen(startPort, '127.0.0.1', () => {
       const { port } = server.address();
@@ -142,6 +148,22 @@ function requestErrorInfo(err, url) {
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// CSP 纵深防御：页面会渲染第三方站点抓取的文本，限制脚本只能同源加载；
+// 封面图为外部直链（img 放行 http/https），播放走同源 /proxy 且 hls.js 依赖 blob:
+app.use((_req, res, next) => {
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: http: https: blob:",
+    "media-src 'self' blob: http: https:",
+    "connect-src 'self' http: https: blob:",
+    "worker-src 'self' blob:",
+    "font-src 'self' data:",
+  ].join('; '));
+  next();
+});
 
 // 托管前端构建产物
 app.use(express.static(BUILD_DIR));

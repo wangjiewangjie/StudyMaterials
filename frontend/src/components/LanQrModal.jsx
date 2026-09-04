@@ -58,7 +58,8 @@ export default function LanQrModal({ open, onClose }) {
       open={open}
       onCancel={onClose}
       footer={null}
-      width={Math.min(420, typeof window !== 'undefined' ? window.innerWidth - 32 : 420)}
+      width={420}
+      style={{ maxWidth: 'calc(100vw - 32px)' }}
       destroyOnClose
       centered
       closable={false}
@@ -71,7 +72,9 @@ export default function LanQrModal({ open, onClose }) {
     >
       <div className="p-5 sm:p-6 border-b border-white/5 flex items-start justify-between gap-4">
         <div className="flex items-start gap-2.5 min-w-0">
-          <QrcodeOutlined className="text-ph-orange text-xl mt-0.5 shrink-0" />
+          <span className="text-ph-orange text-xl mt-0.5 shrink-0" aria-hidden="true">
+            <QrcodeOutlined />
+          </span>
           <div className="min-w-0">
             <h2 className="text-lg font-black text-white m-0">扫码用手机打开</h2>
             <p className="text-xs text-gray-400 mt-1 mb-0">

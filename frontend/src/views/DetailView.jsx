@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, lazy, Suspense } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { Button, Tag, Row, Col, Spin } from 'antd';
 import {
   ArrowLeftOutlined, StarFilled, StarOutlined, LinkOutlined,
@@ -46,12 +46,41 @@ function fallbackBlocks(content, images) {
 function ThumbImage({ itemId, index }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const triggerRef = useRef(null);
+  const closeRef = useRef(null);
+  const wasOpenRef = useRef(false);
   const src = `/api/image/${itemId}/${index}`;
+
+  // 打开时聚焦关闭按钮；关闭时归还焦点到缩略图（仅在曾经打开过时）
+  useEffect(() => {
+    if (isOpen) {
+      wasOpenRef.current = true;
+      closeRef.current?.focus();
+    } else if (wasOpenRef.current) {
+      wasOpenRef.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [isOpen]);
+
+  // 捕获阶段拦截 Esc：只关闭查看器，不触发页面级 Esc 返回
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setIsOpen(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [isOpen]);
+
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         className="block w-full overflow-hidden rounded border border-white/5 bg-ph-elevated detail-thumb-wrap p-0 m-0 cursor-zoom-in relative"
+        aria-label={`放大查看配图 ${index + 1}`}
         onClick={() => setIsOpen(true)}
       >
         {!isLoaded && <div className="absolute inset-0 skel" aria-hidden />}
@@ -71,12 +100,28 @@ function ThumbImage({ itemId, index }) {
           onClick={() => setIsOpen(false)}
           role="dialog"
           aria-modal="true"
+          aria-label={`配图 ${index + 1} 预览`}
         >
+          <button
+            ref={closeRef}
+            type="button"
+            className="img-viewer-close"
+            aria-label="关闭预览"
+            onClick={() => setIsOpen(false)}
+          >
+            ×
+          </button>
           <img src={src} alt={`配图 ${index + 1}`} className="max-w-full max-h-full object-contain" />
         </div>
       )}
     </>
   );
+}
+
+function tagKeyDown(e, onTagClick, tag) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  onTagClick?.(tag);
 }
 
 function MetaHeader({ item, localCategory, localTags, onTagClick }) {
@@ -89,8 +134,11 @@ function MetaHeader({ item, localCategory, localTags, onTagClick }) {
         <div className="flex flex-wrap items-center gap-1.5">
           {localCategory && (
             <Tag
+              role="button"
+              tabIndex={0}
               className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-orange/15 !text-ph-orange !border-ph-orange/30"
               onClick={() => onTagClick && onTagClick(localCategory)}
+              onKeyDown={(e) => tagKeyDown(e, onTagClick, localCategory)}
             >
               {localCategory}
             </Tag>
@@ -98,8 +146,11 @@ function MetaHeader({ item, localCategory, localTags, onTagClick }) {
           {localTags.map((t) => (
             <Tag
               key={t}
+              role="button"
+              tabIndex={0}
               className="!cursor-pointer !m-0 !rounded-lg !px-2.5 !py-1 !text-xs !bg-ph-elevated !text-ph-text-secondary !border-white/10 hover:!text-ph-orange hover:!border-ph-orange/40 transition-colors"
               onClick={() => onTagClick && onTagClick(t)}
+              onKeyDown={(e) => tagKeyDown(e, onTagClick, t)}
             >
               #{t}
             </Tag>

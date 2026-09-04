@@ -35,6 +35,7 @@ export async function fetchVideos(q, signal) {
 /** 收藏列表 { items, ids } */
 export async function fetchFavorites(signal) {
   const res = await fetch('/api/favorites', { signal });
+  if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
   return res.json();
 }
 
@@ -45,18 +46,21 @@ export async function addFavorite(item) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(item),
   });
+  if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
   return res.json();
 }
 
 /** 按 id 取消收藏 */
 export async function removeFavorite(id) {
   const res = await fetch(`/api/favorites/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
   return res.json();
 }
 
 /** 清空全部收藏 */
 export async function clearAllFavoritesAPI() {
   const res = await fetch('/api/favorites', { method: 'DELETE' });
+  if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
   return res.json();
 }
 
@@ -95,6 +99,7 @@ export async function syncKeywords(keywords, signal) {
 /** 刷新单条详情/播放地址 */
 export async function refreshVideo(id, signal) {
   const res = await fetch(`/api/refresh/${id}`, { signal });
+  if (!res.ok) throw new Error(`服务器返回 ${res.status}`);
   return res.json();
 }
 

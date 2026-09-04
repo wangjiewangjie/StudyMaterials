@@ -78,14 +78,21 @@ export default function TagFilterBar({ tags = [], activeTag = '', onTagChange })
     const el = scrollerRef.current;
     if (!el) return;
     const dx = e.clientX - dragRef.current.startX;
-    if (Math.abs(dx) > 4) dragRef.current.moved = true;
-    el.scrollLeft = dragRef.current.scrollLeft - dx;
+    if (Math.abs(dx) > 4 && !dragRef.current.moved) {
+      dragRef.current.moved = true;
+      // 拖拽中挂载 is-dragging：切换 grabbing 光标并禁用 chip 误触
+      el.classList.add('is-dragging');
+    }
+    if (dragRef.current.moved) {
+      el.scrollLeft = dragRef.current.scrollLeft - dx;
+    }
   };
 
   const endDrag = (e) => {
     const el = scrollerRef.current;
     if (!el || !dragRef.current.active) return;
     dragRef.current.active = false;
+    el.classList.remove('is-dragging');
     try {
       if (e?.pointerId != null) el.releasePointerCapture?.(e.pointerId);
     } catch { /* ignore */ }

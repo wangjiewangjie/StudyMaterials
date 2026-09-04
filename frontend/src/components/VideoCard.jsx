@@ -18,18 +18,18 @@ function VideoCardBase({
   // 入场动画只在首次挂载时播一次；同步刷新改 index 时不再重播，避免列表「闪回顶部」
   const enterDelayRef = useRef(`${Math.min(index, 12) * 28}ms`);
 
-  const handleClick = useCallback(() => onClick(item), [item, onClick]);
+  const handleClick = useCallback((e) => {
+    // 修饰键 / 非左键点击交给浏览器默认行为（新标签打开）
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    onClick(item);
+  }, [item, onClick]);
   const handleFav = useCallback((e) => {
+    e.preventDefault();
     e.stopPropagation();
     if (isFavPending) return;
     onToggleFavorite?.(item);
   }, [item, onToggleFavorite, isFavPending]);
-  const handleKey = useCallback((e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onClick(item);
-    }
-  }, [item, onClick]);
 
   const sourceLabel = siteName
     || (item.siteUrl ? (hostnameOf(item.siteUrl) || '未知来源') : '未知来源');
@@ -39,14 +39,12 @@ function VideoCardBase({
   else if (isFavorited) favIcon = <StarFilled style={{ fontSize: 18 }} />;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
+    <a
+      href={`/detail/${encodeURIComponent(item.id)}`}
       aria-label={`${item.title || `条目 ${item.id}`}${hasVideo ? '，可播放' : '，无法播放'}`}
-      className="video-card group overflow-hidden rounded bg-ph-card border border-white/5 cursor-pointer focus-visible:border-ph-orange focus-visible:outline-none rise-in card-scale hover:border-white/15 transition-colors"
+      className="video-card group overflow-hidden rounded bg-ph-card border border-white/5 cursor-pointer focus-visible:border-ph-orange rise-in card-scale hover:border-white/15 transition-colors"
       style={{ animationDelay: enterDelayRef.current }}
       onClick={handleClick}
-      onKeyDown={handleKey}
     >
       <div className="relative w-full overflow-hidden bg-ph-elevated" style={{ aspectRatio: '16/9' }}>
         {thumb && imgOk ? (
@@ -126,7 +124,7 @@ function VideoCardBase({
           </div>
         </div>
       </div>
-    </div>
+    </a>
   );
 }
 

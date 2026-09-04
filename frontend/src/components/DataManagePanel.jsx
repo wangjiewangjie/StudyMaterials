@@ -226,7 +226,7 @@ export default function DataManagePanel({ onImported }) {
           {archives.length === 0 ? (
             <p className="text-[11px] text-ph-text-tertiary m-0">暂无历史归档（下次重启后可见上一会话）</p>
           ) : (
-            <ul className="m-0 pl-4 text-[11px] text-ph-text-secondary space-y-1 max-h-28 overflow-y-auto">
+            <ul className="m-0 pl-4 text-[11px] text-ph-text-secondary space-y-1 max-h-28 overflow-y-auto scroll-contain">
               {archives.slice(0, 8).map((a) => (
                 <li key={a.name} className="font-mono truncate" title={a.path}>
                   {a.name}

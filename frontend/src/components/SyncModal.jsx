@@ -41,7 +41,8 @@ export default function SyncModal({
       open={open}
       onCancel={onBackground}
       footer={null}
-      width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth - 32 : 720)}
+      width={720}
+      style={{ maxWidth: 'calc(100vw - 32px)' }}
       destroyOnClose
       centered
       closable={false}
@@ -54,7 +55,9 @@ export default function SyncModal({
     >
       <div className="p-5 sm:p-6 border-b border-white/5 flex items-start justify-between gap-4">
         <div className="flex items-start gap-2.5 min-w-0">
-          <SyncOutlined className="text-ph-orange text-xl mt-0.5 shrink-0" spin={!isDone} />
+          <span className="text-ph-orange text-xl mt-0.5 shrink-0" aria-hidden="true">
+            <SyncOutlined spin={!isDone} />
+          </span>
           <div className="min-w-0">
             <h2 className="text-lg sm:text-xl font-black text-white m-0">
               {isDone ? '同步已完成' : '正在同步数据索引'}
@@ -64,7 +67,7 @@ export default function SyncModal({
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ph-orange font-bold tabular-nums">
               <span className="inline-flex items-center gap-1.5">
-                <ClockCircleOutlined style={{ fontSize: 12 }} />
+                <span aria-hidden="true"><ClockCircleOutlined style={{ fontSize: 12 }} /></span>
                 已运行 {elapsedLabel}
               </span>
             </div>
@@ -129,7 +132,9 @@ export default function SyncModal({
         </div>
 
         <div className="notice-soft !p-3">
-          <SafetyCertificateOutlined className="text-ph-orange shrink-0" style={{ fontSize: 14 }} />
+          <span className="text-ph-orange shrink-0" aria-hidden="true">
+            <SafetyCertificateOutlined style={{ fontSize: 14 }} />
+          </span>
           <p className="text-[11px] text-gray-400 leading-tight m-0">
             同步过程使用只读模式，不会修改你的收藏配置或远端数据源。所有通信均通过加密通道进行。
           </p>
@@ -156,7 +161,7 @@ export default function SyncModal({
       <div className="p-5 sm:p-6 border-t border-white/5 bg-[#121212]/50 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="flex flex-col gap-0.5 text-sm text-ph-orange font-bold tabular-nums">
           <span className="inline-flex items-center gap-2">
-            <ClockCircleOutlined style={{ fontSize: 14 }} />
+            <span aria-hidden="true"><ClockCircleOutlined style={{ fontSize: 14 }} /></span>
             耗时 {elapsedLabel}
           </span>
         </div>

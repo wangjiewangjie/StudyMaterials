@@ -105,6 +105,7 @@ export default function AppHeader({
               icon={<QrcodeOutlined style={{ fontSize: 13 }} />}
               className={navBtnClass(false)}
               title="扫码用手机打开"
+              aria-label="扫码用手机打开"
             >
               <span className="hidden sm:inline">扫码</span>
             </Button>
@@ -115,6 +116,7 @@ export default function AppHeader({
               onClick={onFavoritesClick}
               icon={isFavoritesView ? <StarFilled style={{ fontSize: 13 }} /> : <StarOutlined style={{ fontSize: 13 }} />}
               className={navBtnClass(isFavoritesView)}
+              aria-label={favoritesCount > 0 ? `收藏（${favoritesCount} 条）` : '收藏'}
             >
               <span className="hidden sm:inline">收藏</span>
               {favoritesCount > 0 && (
@@ -130,6 +132,7 @@ export default function AppHeader({
               onClick={onSyncCenterClick}
               icon={<FileTextOutlined style={{ fontSize: 13 }} />}
               className={navBtnClass(isSyncCenterView)}
+              aria-label="同步日志"
             >
               <span className="hidden sm:inline">日志</span>
             </Button>

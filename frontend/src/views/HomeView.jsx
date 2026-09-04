@@ -143,6 +143,7 @@ export default function HomeView({
       ) : null}
 
       <PageShell home>
+        <h1 className="sr-only">学习资料库</h1>
         {stickyMode ? (
           <div className={`home-sticky-spacer is-${stickyMode}`} aria-hidden />
         ) : null}

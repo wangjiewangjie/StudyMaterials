@@ -3,7 +3,7 @@
  */
 export default function PageShell({ children, home = false }) {
   return (
-    <main className={home ? 'home-page' : 'page-main rise-in'}>
+    <main id="main-content" className={home ? 'home-page' : 'page-main rise-in'}>
       {children}
     </main>
   );

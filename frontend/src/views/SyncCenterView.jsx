@@ -281,7 +281,9 @@ export default function SyncCenterView({
         <div className="flex flex-col sm:flex-row gap-2.5">
           <Input
             size="middle"
-            placeholder="输入关键词，多个用逗号分隔，例：关键词1,关键词2"
+            aria-label="同步关键词"
+            autoComplete="off"
+            placeholder="输入关键词，多个用逗号分隔，如：关键词1, 关键词2…"
             value={keywords}
             onChange={(e) => setKeywords(e.target.value)}
             disabled={isBusy}

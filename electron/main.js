@@ -220,7 +220,16 @@ function createTray() {
 }
 
 function bindWindowStateEvents(win) {
-  const persist = () => saveWindowState();
+  // 拖拽/缩放期间 resize/move 高频触发，防抖 300ms 避免每秒数十次写盘；
+  // 关窗/退出链路仍直接调用 saveWindowState，保证最终状态落盘
+  let persistTimer = null;
+  const persist = () => {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      saveWindowState();
+    }, 300);
+  };
   win.on('resize', () => {
     if (!win.isMaximized()) win.__normalBounds = win.getBounds();
     persist();
@@ -288,7 +297,14 @@ async function createWindow() {
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // 页面渲染第三方站点内容，外链仅放行 http/https，
+    // 防止 file:、smb: 等协议经 shell 唤起系统组件
+    try {
+      const { protocol } = new URL(url);
+      if (protocol === 'http:' || protocol === 'https:') {
+        shell.openExternal(url);
+      }
+    } catch (_) { /* 非法 URL 直接忽略 */ }
     return { action: 'deny' };
   });
 
